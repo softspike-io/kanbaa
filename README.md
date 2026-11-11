@@ -1,10 +1,16 @@
 # Kanbaa
 
-A to-do board for [Herdr](https://herdr.dev), beside your terminals. It shows the Markdown files in a repo's `to-do` folder as cards in five statuses, lets you move them, put an agent on one, and send that agent after it in a new tab. The files are the only state, so you, your agents, your editor and git all look at the same tasks.
+A to-do board for [Herdr](https://herdr.dev), beside your terminals. It shows the Markdown files in a repo's `to-do` folder as cards in five statuses, lets you move them, put an agent on one, and send that agent after it in a new tab. A repo without a `to-do` folder gets one with its first task. The files are the only state and they live in your repo, on your machine: nothing is stored anywhere else, so you, your agents, your editor and git all look at the same tasks.
 
 ![Kanbaa](preview.png)
 
 The layout is Herdr's own with one column added: the sidebar with Spaces and Agents, the tab bar, Files, Changes and the status bar are all Herdr's, unchanged. In the picture, the names of the spaces and agents in the sidebar are blurred.
+
+## Who it is for
+
+Kanbaa is for people who want to stay in charge of their work. You write the backlog, you decide what is Ready, and an agent starts on a task when you send it: unless you change the setting, the board asks first. No task list is kept out of sight. Agents create tasks only if you turn that on, and what they create is the same Markdown file on the same board as yours, where you can read it, change it or delete it.
+
+It suits smaller projects, where a backlog should take a folder and not a service. Everything can be done on the board: add a task, order it, hand it to an agent, read the result, send it back. The terminal stays open to you all the same, since the tasks are files to edit and there is a script to call.
 
 ## How it works
 
