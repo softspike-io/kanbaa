@@ -32,7 +32,7 @@ to-do/KAN-3-rate-limit-the-public-api.md
 
 **Moving a card is editing one line.** Pick another status from a card's `⋯` menu and Kanbaa rewrites the `**Status:**` line and leaves every other byte alone. Move the card back and `git diff` is empty. It works from the other side too: change that line in your editor, or let an agent change it, and within ten seconds the card has walked to its new pen.
 
-**Ready is the gate.** Give a card an agent and move it to Ready, and Kanbaa asks "Send Claude Code after KAN-3?". Say yes and it writes `In progress` into the file and opens a new tab where that agent starts on the task. Cancel and nothing happens. A file that says "Manual pickup only" is never offered: that sheep is yours.
+**Ready is the gate.** Give a card an agent and move it to Ready, and Kanbaa asks "Send Claude Code after KAN-3?". Say yes and it writes `In progress` into the file and opens a new tab where that agent starts on the task. You go along to that tab, or stay on the board if you set it so in the settings. Cancel and nothing happens. A file that says "Manual pickup only" is never offered: that sheep is yours.
 
 **The agent herds its own card.** When the work is finished the agent writes what it did under `## Result` in the task file, sets the status to `In review`, and stops. You open the card, read the result and the files it names, and choose: **Mark as done**, or **Send back** with a note, which lands in the file under `## Feedback` and is passed to the agent if it is still there.
 

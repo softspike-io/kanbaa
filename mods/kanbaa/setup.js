@@ -100,6 +100,7 @@ export function renderSetup(view, t, close) {
     .child(section("Starting tasks",
       choice("start", "When a task with an agent lands in Ready", START, view.view.start ?? "ask", set("start"),
         "For moves and assignments made on this board. The Start buttons always ask."),
+      choice("open", "After sending an agent", BACK, view.view.open ?? "go", set("open")),
       choice("agent", "Agent for a new task", agents, agent, set("agent"))))
     .child(section("Review",
       choice("back", "After sending a task back", BACK, view.view.back ?? "stay", set("back"))))

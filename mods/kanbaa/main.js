@@ -88,8 +88,8 @@ export default class Board extends View {
     this.query.on("focus", () => { this.searching = true; });
     this.query.on("blur", () => { this.searching = false; });
     cx.timer.every(250, cx => { if (this.searching && this.query.value() !== this.searched) cx.notify(); });
-    try { this.view = { rows: false, closed: [], start: "ask", archive: "off", back: "stay", ...JSON.parse(localStorage.getItem("view") ?? "{}") }; }
-    catch { this.view = { rows: false, closed: [], start: "ask", archive: "off", back: "stay" }; }
+    try { this.view = { rows: false, closed: [], start: "ask", open: "go", archive: "off", back: "stay", ...JSON.parse(localStorage.getItem("view") ?? "{}") }; }
+    catch { this.view = { rows: false, closed: [], start: "ask", open: "go", archive: "off", back: "stay" }; }
     this.refresh(cx);
     cx.timer.every(10000, cx => this.refresh(cx));
     // A menu or confirm choice comes back as "pick-<n>": status-menu and confirm only run commands.
@@ -238,7 +238,11 @@ export default class Board extends View {
       {
         // The agents already there, so the one that now appears under this tab name is known to be the new one.
         this.started.push({ name: tabName(card), path: card.path, known: new Set(agents().map(a => a.address)), at: Date.now() });
+        const here = spaces().find(s => s.active)?.tabs?.find(tab => tab.active)?.id;
         run("tab.new", { name: tabName(card), folder: card.root, argv: agent.run, task: startPrompt(card.task, back) });
+        // ⚙: go to the agent's new tab (the default, and what tab.new does) or stay on the board. tab.new cannot
+        // open a tab behind this one, so staying is selecting the tab we were on again.
+        if (this.view.open === "stay" && here) run("tab.select", { id: here });
       });
   }
 
