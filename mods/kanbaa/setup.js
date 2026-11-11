@@ -1,7 +1,7 @@
 // The settings panel, shown over the board the first time it opens and from the header's ⚙ after that
-// (main.js over()): what happens when a task with an agent lands in Ready and which agent a new task
-// starts with (view.view.start and .agent, kept by main.js setView), and which agents get told how to create and move tasks. view.setup is its state. Every write is
-// install-skill.mjs's, and only after Apply: the panel itself writes nothing.
+// (main.js over()). Three sections are the board's own choices (view.view, kept by main.js setView and
+// saved by the click); the last is which agents get told how to create and move tasks. view.setup is
+// that last section's state: every write there is install-skill.mjs's, and only after its Apply button.
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, appHome } from "herdr";
@@ -11,12 +11,9 @@ const TARGETS = [
   { id: "codex", name: "Codex", where: "a marked section in ~/.codex/AGENTS.md" },
   { id: "hermes", name: "Hermes", where: "a skill in Hermes's skills, under productivity/kanbaa-task" },
 ];
-const START = [
-  ["ask", "Ask first"],
-  ["auto", "Send the agent right away"],
-  ["off", "Do nothing"],
-];
-const AFTER = [["off", "Never"], ["1h", "After 1 hour"], ["1d", "After 1 day"], ["7d", "After 7 days"]];
+const START = [["ask", "Ask first"], ["auto", "Send right away"], ["off", "Do nothing"]];
+const BACK = [["stay", "Stay on the board"], ["go", "Go to the agent's tab"]];
+const AFTER = [["off", "Never"], ["1h", "1 hour"], ["1d", "1 day"], ["7d", "7 days"]];
 const STATE = { installed: "Installed", outdated: "Update available", missing: "Not installed", unavailable: "Not found on this computer" };
 const installer = () => `${appHome()}/mods/kanbaa/install-skill.mjs`;
 const failed = e => /program not found|cannot start/i.test(String(e)) ? "Node.js was not found. The task script and this setup need it." : String(e).split("\n")[0];
@@ -69,45 +66,53 @@ export function renderSetup(view, t, close) {
   const button = (id, text, primary) => div().id(id).px(10).h(26).flex_none().flex().items_center().rounded(6).cursor_pointer().text_size(12)
     .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised).text_color(primary ? t.solid_foreground : t.foreground)
     .hover(el => el.opacity(0.88)).child(text);
+  // A section: a small heading over a line, then its settings.
+  const section = (name, ...settings) => v_flex().gap(8)
+    .child(div().pb(4).border_b(1).border_color(t.border).text_size(11).font_semibold().text_color(t.muted).child(name.toUpperCase()))
+    .children(settings);
+  // One of the board's own choices: what it is about, its options as pills (the chosen one filled), and
+  // a line of small print where the choice needs one. A click on a pill is the save.
+  const choice = (id, name, options, chosen, pick, note) => v_flex().gap(5)
+    .child(div().text_size(12.8).child(name))
+    .child(h_flex().flex_wrap().gap(6).children(options.map(([key, text]) => div().id(`${id}-${key || "none"}`).px(9).h(24).flex_none().flex().items_center().rounded(12).cursor_pointer().text_size(12)
+      .border_1().border_color(chosen === key ? t.accent : t.input).bg(chosen === key ? t.selected : t.background).text_color(chosen === key ? t.foreground : t.muted)
+      .hover(el => el.bg(t.hover)).on_click((_e, cx) => pick(key, cx)).child(text))))
+    .when(Boolean(note), el => el.child(div().text_size(11).text_color(t.dim).child(note)));
   const row = x => {
     const state = s.now[x.id], off = state === "unavailable";
-    return h_flex().id(`setup-${x.id}`).gap(10).items_start().py(4).rounded(6)
+    return h_flex().id(`setup-${x.id}`).gap(10).items_start().py(3).rounded(6)
       .when(!off, el => el.cursor_pointer().on_click((_e, cx) => { s.want[x.id] = !s.want[x.id]; cx.notify(); }))
       .child(div().size(16).flex_none().flex().items_center().justify_center().rounded(4).border_1().border_color(t.input)
         .bg(s.want[x.id] ? t.solid : t.background).text_size(11).text_color(t.solid_foreground).child(s.want[x.id] ? "✓" : ""))
       .child(v_flex().flex_1().min_w(0).gap(1)
-        .child(div().text_size(12.8).text_color(off ? t.dim : t.foreground).child(x.name))
-        .child(div().text_size(11).text_color(t.dim).child(x.where))
-        .child(div().text_size(11).text_color(state === "installed" ? t.done : state === "outdated" ? t.working : t.dim).child(STATE[state] ?? state)));
+        .child(h_flex().gap(8).items_center()
+          .child(div().text_size(12.8).text_color(off ? t.dim : t.foreground).child(x.name))
+          .child(div().text_size(11).text_color(state === "installed" ? t.done : state === "outdated" ? t.working : t.dim).child(STATE[state] ?? state)))
+        .child(div().text_size(11).text_color(t.dim).child(x.where)));
   };
-  // The board's own choices (view.view): one of several, saved by the click.
-  const radio = (id, on, name, pick) => h_flex().id(id).gap(10).items_center().py(3).cursor_pointer().on_click(pick)
-    .child(div().size(14).flex_none().flex().items_center().justify_center().rounded(7).border_1().border_color(on ? t.accent : t.input).bg(t.background)
-      .child(div().size(6).rounded(3).bg(on ? t.accent : t.background)))
-    .child(div().text_size(12.8).text_color(on ? t.foreground : t.muted).child(name));
-  const chosen = view.agents.some(a => a.installed && a.key === view.view.agent) ? view.view.agent : "";
-  return v_flex().px(14).pt(12).pb(10).gap(10)
-    .child(div().text_size(14).font_semibold().child("Settings"))
-    .child(v_flex().gap(4)
-      .child(div().text_size(12.8).font_medium().child("When a task with an agent lands in Ready"))
-      .children(START.map(([key, name]) => radio(`start-${key}`, (view.view.start ?? "ask") === key, name, (_e, cx) => view.setView({ start: key }, cx))))
-      .child(div().text_size(11).text_color(t.dim).child("Saved as you pick. For moves and assignments made on this board. The Start buttons always ask, and a file that turns Ready on disk starts nothing.")))
-    .child(v_flex().gap(4)
-      .child(div().pt(4).text_size(12.8).font_medium().child("Agent for a new task"))
-      .children([{ key: "", name: "None" }, ...view.agents.filter(a => a.installed)].map(a =>
-        radio(`agent-${a.key || "none"}`, chosen === a.key, a.name, (_e, cx) => view.setView({ agent: a.key }, cx))))
-      .child(div().text_size(11).text_color(t.dim).child("Saved as you pick. Preselected when you make a new task; you can still change it there.")))
-    .child(v_flex().gap(4)
-      .child(div().pt(4).text_size(12.8).font_medium().child("Send done tasks to the archive"))
-      .children(AFTER.map(([key, name]) => radio(`archive-${key}`, (view.view.archive ?? "off") === key, name, (_e, cx) => view.setView({ archive: key }, cx))))
-      .child(div().text_size(11).text_color(t.dim).child("Saved as you pick. Counted from the last change to the task's file, and done while this board is open.")))
-    .child(div().pt(4).text_size(12.8).font_medium().child("Let agents add tasks"))
-    .child(div().text_size(12).text_color(t.muted).child("Kanbaa comes with a small script that creates a task with the right id. Tick the agents that should be told about it. A tick changes nothing by itself: an Apply button appears here once the ticks differ from what is installed, and unticking one takes it out again."))
-    .when(Boolean(s.now), el => el.child(v_flex().gap(4).children(TARGETS.map(row))
-      // Only for the agents above, and only while there is something to apply: the choice at the top saves itself.
-      .when(dirty || s.busy, el => el.child(h_flex().pt(4).justify_end()
-        .child(button("setup-apply", s.busy ? "Working…" : "Apply to agents", true).on_click((_e, cx) => { if (dirty) apply(view, cx); }))))))
-    .when(!s.now || Boolean(s.error), el => el.child(div().text_size(12).text_color(s.error ? t.blocked : t.dim).child(s.error ?? "Checking what is installed…")))
-    .child(h_flex().gap(8).items_center().justify_end()
-      .child(button("setup-close", "Close").on_click(close)));
+  const agents = [["", "None"], ...view.agents.filter(a => a.installed).map(a => [a.key, a.name])];
+  const agent = agents.some(([key]) => key === view.view.agent) ? view.view.agent : "";
+  const set = name => (key, cx) => view.setView({ [name]: key }, cx);
+  return v_flex().px(14).pt(12).pb(10).gap(16)
+    .child(h_flex().items_center()
+      .child(div().flex_1().text_size(14).font_semibold().child("Settings"))
+      .child(div().text_size(11).text_color(t.dim).child("Choices save as you pick")))
+    .child(section("Starting tasks",
+      choice("start", "When a task with an agent lands in Ready", START, view.view.start ?? "ask", set("start"),
+        "For moves and assignments made on this board. The Start buttons always ask."),
+      choice("agent", "Agent for a new task", agents, agent, set("agent"))))
+    .child(section("Review",
+      choice("back", "After sending a task back", BACK, view.view.back ?? "stay", set("back"))))
+    .child(section("Archive",
+      choice("archive", "Archive done tasks after", AFTER, view.view.archive ?? "off", set("archive"),
+        "Counted from the last change to a task's file, while this board is open.")))
+    .child(section("Agents",
+      div().text_size(12).text_color(t.muted).child("Tick the agents that should know how to create and move tasks. Nothing is written until you press Apply, which appears when a tick differs from what is installed."),
+      !s.now ? div().text_size(12).text_color(s.error ? t.blocked : t.dim).child(s.error ?? "Checking what is installed…")
+        : v_flex().gap(4).children(TARGETS.map(row))
+          .when(Boolean(s.error), el => el.child(div().text_size(12).text_color(t.blocked).child(s.error)))
+          // Only for the agents above, and only while there is something to apply.
+          .when(dirty || s.busy, el => el.child(h_flex().pt(2).justify_end()
+            .child(button("setup-apply", s.busy ? "Working…" : "Apply to agents", true).on_click((_e, cx) => { if (dirty) apply(view, cx); }))))))
+    .child(h_flex().justify_end().child(button("setup-close", "Close").on_click(close)));
 }

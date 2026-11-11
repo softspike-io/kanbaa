@@ -69,17 +69,27 @@ function parts(card) {
   const full = description(card.text), split = ["review", "done", "archive"].includes(card.column) ? splitResult(full) : null;
   return split?.found ? { body: split.body, answer: split.result, split: true } : { body: full, answer: "", split: false };
 }
+// How a status lists its cards. The working statuses go by the places people give them (parse.js
+// byOrder); Done and the Archive are a record, so the one finished last is on top: by the file's last
+// change, which for a done task is when it was done (or last touched since).
+const PLACED = id => id !== "done" && id !== "archive";
+const listed = id => PLACED(id) ? byOrder : (a, b) => b.changed - a.changed || byOrder(a, b);
 const DOT = { backlog: "dim", ready: "accent", progress: "working", review: "blocked", done: "done" };
 
 export default class Board extends View {
   init(_props, cx) {
     this.cards = []; this.agents = []; this.picks = [];
-    this.started = []; this.linked = null; this.offers = []; // follow()
+    this.started = []; this.linked = null; this.offers = []; this.released = new Set(); // follow()
     this.keys = cx.focus_handle(); // Esc: see escape()
-    this.query = InputState.new({ placeholder: "Filter tasks" });
-    this.query.on("change", (_e, cx) => cx.notify());
-    try { this.view = { rows: false, closed: [], start: "ask", archive: "off", ...JSON.parse(localStorage.getItem("view") ?? "{}") }; }
-    catch { this.view = { rows: false, closed: [], start: "ask", archive: "off" }; }
+    this.query = InputState.new({ placeholder: "Search tasks" });
+    for (const event of ["change", "submit"]) this.query.on(event, (_e, cx) => cx.notify());
+    // While the search field has the keyboard, what is in it is also looked at four times a second, so the
+    // board follows the typing even where a change is not announced. Redraws only when the text differs.
+    this.query.on("focus", () => { this.searching = true; });
+    this.query.on("blur", () => { this.searching = false; });
+    cx.timer.every(250, cx => { if (this.searching && this.query.value() !== this.searched) cx.notify(); });
+    try { this.view = { rows: false, closed: [], start: "ask", archive: "off", back: "stay", ...JSON.parse(localStorage.getItem("view") ?? "{}") }; }
+    catch { this.view = { rows: false, closed: [], start: "ask", archive: "off", back: "stay" }; }
     this.refresh(cx);
     cx.timer.every(10000, cx => this.refresh(cx));
     // A menu or confirm choice comes back as "pick-<n>": status-menu and confirm only run commands.
@@ -198,6 +208,15 @@ export default class Board extends View {
     return card.manual ? null : this.agents.find(a => a.key === card.agent && a.installed) ?? null;
   }
 
+  // The status a card is shown under. It is the file's, with one exception: an agent writes "In review" as
+  // its last action and then still prints its summary, so a card whose file says Review while its own agent
+  // is still working stays under In progress until that agent comes to rest. Only the place on the board
+  // differs; the file is untouched and says Review all along. Released once per round (follow()), so
+  // talking to that agent again later does not pull the card back.
+  where(card) {
+    return card.column === "review" && !this.released.has(card.path) && tabOf(card)?.working ? "progress" : card.column;
+  }
+
   // The other tasks of this checkout whose agents are working right now. Every started agent works in
   // the repo's one working tree, so two at once can undo each other's edits.
   busy(card) {
@@ -223,24 +242,29 @@ export default class Board extends View {
       });
   }
 
+  // The card's menu: where to move it, and who is on it. Each under its own heading.
   menu(card) {
     const items = [], agent = this.installed(card);
     this.picks = [];
     const add = (label, pick, more) => items.push({ label, ...more, action: [`kanbaa.pick-${this.picks.push(pick) - 1}`, {}] });
+    const head = label => items.push({ header: true, label });
     if (card.column === "ready" && agent) add(`Start ${agent.name}…`, cx => this.ask(card, agent, cx));
-    for (const c of COLUMNS) if (c.id !== card.column) add(`Move to ${c.label}`, cx => this.write(card, setStatus(card.text, c.word), cx, cx => this.landed(card, cx)));
-    // Its place in the status: on top of the others, or back among the unplaced ones (which go by id).
-    const same = this.cards.filter(c => c.column === card.column).sort(byOrder);
-    if (same[0] !== card) add("Move to top", cx => this.write(card, setOrder(card.text, Math.min(1, ...same.filter(c => c.order !== null).map(c => c.order)) - 1), cx));
-    if (card.order !== null) add("Clear its place", cx => this.write(card, setOrder(card.text, null), cx));
-    for (const a of this.agents.filter(a => a.installed)) add(a.name, cx => this.write(card, setAgent(card.text, a.key), cx, cx => this.landed(card, cx)), { current: a.key === card.agent, hint: "agent" });
-    add("Unassigned", cx => this.write(card, setAgent(card.text, ""), cx), { current: !card.agent, hint: "agent" });
-    openOverlay({ mod: "status-menu", kind: "popup", width: 250, height: Math.min(items.length, 14) * 28 + 12, props: { items } });
+    head("Move to");
+    for (const c of COLUMNS) if (c.id !== card.column) add(c.label, cx => this.write(card, setStatus(card.text, c.word), cx, cx => this.landed(card, cx)));
+    head("Agent");
+    for (const a of this.agents.filter(a => a.installed)) add(a.name, cx => this.write(card, setAgent(card.text, a.key), cx, cx => this.landed(card, cx)), { current: a.key === card.agent });
+    add("Unassigned", cx => this.write(card, setAgent(card.text, ""), cx), { current: !card.agent });
+    // As tall as its rows (a heading is a little lower than an item), up to a height it scrolls past.
+    const height = Math.min(items.reduce((sum, it) => sum + (it.header ? 24 : 28), 12), 420);
+    openOverlay({ mod: "status-menu", kind: "popup", width: 240, height, props: { items } });
   }
 
   card(t, card, readonly) {
     const agent = card.agent ? this.agents.find(a => a.key === card.agent) : null;
     const go = this.startable(card), at = card.agent ? tabOf(card) : null;
+    // Where it stands among the cards shown under the same status: the top one cannot go up, the bottom one not down.
+    const same = this.cards.filter(c => this.where(c) === this.where(card)).sort(byOrder);
+    const first = same[0]?.rel === card.rel, last = same.at(-1)?.rel === card.rel;
     // The file can say In review a moment before the agent's turn has really ended: the spinner is the terminal's word on it.
     const working = Boolean(at?.working);
     return v_flex().id(`card-${card.rel}`).flex_none().p(10).gap(5).rounded(8).bg(t.surface).border_1().border_color(t.border).cursor_pointer().hover(s => s.bg(t.hover))
@@ -249,6 +273,11 @@ export default class Board extends View {
       .child(h_flex().gap(6).items_start()
         .child(v_flex().flex_1().min_w(0).when(Boolean(card.id), el => el.child(div().text_size(10.5).text_color(t.dim).child(card.id)))
           .child(div().font_medium().text_color(t.foreground).child(card.title)))
+        // Its place in the status: one up, one down.
+        .when(!readonly && PLACED(this.where(card)), el => el.children([["up", "▲", -1], ["down", "▼", 1]].map(([way, sign, delta]) => (delta < 0 ? first : last) ? div().w(16).flex_none() // no button, its room kept so the other one stays put
+          : div().id(`${way}-${card.rel}`).w(16).h(20).flex_none().flex().items_center().justify_center().rounded(4).text_size(8).text_color(t.dim)
+            .hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip(`Move ${way}`).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+            .on_click((_e, cx) => { cx.stop_propagation(); this.moveBy(card, delta, cx); }).child(sign))))
         .when(!readonly, el => el.child(div().id(`more-${card.rel}`).w(20).h(20).flex_none().flex().items_center().justify_center().rounded(5).text_color(t.dim)
           .hover(s => s.bg(t.raised).text_color(t.foreground)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => { cx.stop_propagation(); this.menu(card); }).child("⋯"))))
@@ -260,6 +289,8 @@ export default class Board extends View {
           .when(Boolean(at), el => el.cursor_pointer().hover(s => s.text_color(t.accent)).tooltip("Go to its tab")
             .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => { cx.stop_propagation(); goTo(at); }))))
         .when(working, el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900).tooltip("Its agent is still working")))
+        // Its file already says Review: the agent is writing its last words.
+        .when(working && card.column === "review", el => el.child(div().flex_none().text_color(t.dim).child("finishing")))
         .when(card.boxes > 0, el => el.child(div().flex_none().child(`${card.ticked}/${card.boxes}`)))
         .when(card.manual, el => el.child(div().flex_none().px(5).rounded(4).bg(t.raised).text_color(t.blocked).child("manual")))
         // The sheepdog, bottom right: send the agent after this task. Asks first, like every Start button.
@@ -281,6 +312,16 @@ export default class Board extends View {
     const installed = this.agents.filter(a => a.installed);
     openForm(this, { root: this.root, dir: this.dir, id: nextId(this.repo, this.names, issuedIn(this.counter?.text, this.repo)), status,
       agent: installed.find(a => a.key === this.view.agent)?.key ?? "", agents: installed.map(a => ({ key: a.key, name: a.name })) }, cx);
+  }
+
+  // One place up or down in its status. Places are numbers in the files (their Order lines): the status's
+  // cards are numbered as they then stand, and each card whose number changes is rewritten. The first move
+  // in a status therefore writes all of its cards once; later ones, the two that swap.
+  moveBy(card, delta, cx) {
+    const same = this.cards.filter(c => this.where(c) === this.where(card)).sort(byOrder), from = same.findIndex(c => c.rel === card.rel), to = from + delta;
+    if (from < 0 || to < 0 || to >= same.length) return;
+    same.splice(to, 0, same.splice(from, 1)[0]);
+    same.forEach((c, place) => { if (c.order !== place) this.write(c, setOrder(c.text, place), cx); });
   }
 
   // Notes that this id has been handed out, so that it is not given again when its task is deleted.
@@ -334,11 +375,12 @@ export default class Board extends View {
   over(t, id, close, panel, width = 420) {
     // The backdrop scrolls when the panel is taller than the board, so its buttons are always reachable;
     // the two springs keep a shorter panel in the middle and give a taller one its margin.
-    return v_flex().id(`${id}-backdrop`).absolute().inset_0().items_center().px(14).bg("#00000099").overflow_y_scrollbar().on_click(close ?? (() => {}))
+    return div().id(`${id}-backdrop`).absolute().inset_0().bg("#00000099").on_click(close ?? (() => {}))
+      .child(v_flex().id(`${id}-scroll`).absolute().inset_0().items_center().px(14).overflow_y_scrollbar()
       .child(div().flex_1().min_h(14))
       .child(panel.id(id).flex_none().w_full().max_w(width).rounded(10).bg(t.popover).border_1().border_color(t.border).shadow_lg()
         .on_click((_e, cx) => cx.stop_propagation()))
-      .child(div().flex_1().min_h(14));
+      .child(div().flex_1().min_h(14)));
   }
 
   // Deletes the task's file, after asking. Git can bring back a committed file; nothing else can.
@@ -372,6 +414,12 @@ export default class Board extends View {
     }
     const all = terminals();
     if (!all.length) return; // nothing known yet (or the core is away): not "every agent has closed"
+    // A task in Review whose agent has come to rest (or has none) is released to the Review column, once:
+    // see where(). Leaving Review arms it again for the next round.
+    for (const card of this.cards) {
+      if (card.column !== "review") this.released.delete(card.path);
+      else if (!tabOf(card)?.working) this.released.add(card.path);
+    }
     const now = new Map(all.filter(term => term.labels?.[TASK] && live(term)).map(term => [term.address, term.labels[TASK]]));
     for (const [address, path] of this.linked ?? []) {
       const card = now.has(address) ? null : this.cards.find(c => c.path === path);
@@ -457,7 +505,7 @@ export default class Board extends View {
       if (this.shown === card.rel) { this.endEdit(); this.pick = null; this.peek = null; this.shown = null; }
       cx.notify();
       if (at?.terminal) {
-        goTo(at);
+        if (this.view.back === "go") goTo(at); // ⚙: stay on the board (the default) or go to the agent's tab
         cx.spawn(async () => {
           // Typed only to an agent at rest. Its status is read here and not left to hc's --if idle: an agent that
           // has finished reports "done", not "idle", and would be refused. hc itself still holds back from a blocked program.
@@ -482,7 +530,7 @@ export default class Board extends View {
     const cancel = (_e, cx) => { this.closeBack(); cx.notify(); };
     if (!card) return v_flex().p(14).child(button("back-cancel", "Close").on_click(cancel));
     const at = card.agent ? tabOf(card) : null;
-    const then = at?.terminal ? (!at.resting ? "Its agent is busy, so nothing is typed to it: you are taken to its tab." : "Its agent is told to read it, and you are taken to its tab.")
+    const then = at?.terminal ? (!at.resting ? "Its agent is busy, so nothing is typed to it; a toast will say so." : "Its agent is told to read it.") + (this.view.back === "go" ? " You are taken to its tab." : "")
       : this.installed(card) ? "Its agent's tab is gone: you are asked whether to send a new one." : "No agent is on it: it waits in In progress.";
     return v_flex().px(14).pt(12).pb(10).gap(8)
       .child(div().text_size(14).font_semibold().child(`Send ${card.id || "this task"} back`))
@@ -647,10 +695,11 @@ export default class Board extends View {
     const button = (id, label) => div().id(id).px(8).h(24).flex_none().flex().items_center().rounded(6).cursor_pointer().text_size(12).text_color(t.muted)
       .hover(s => s.bg(t.hover)).child(label);
     const creates = !readonly && this.loaded && Boolean(this.root);
-    const query = this.query.value().trim(), visible = query ? this.cards.filter(card => matches(card, query)) : this.cards;
-    const archived = visible.filter(card => card.column === "archive").sort(byOrder), tab = this.tab ?? "board";
+    this.searched = this.query.value();
+    const query = this.searched.trim(), visible = query ? this.cards.filter(card => matches(card, query)) : this.cards;
+    const archived = visible.filter(card => card.column === "archive").sort(listed("archive")), tab = this.tab ?? "board";
     const column = c => {
-      const cards = visible.filter(card => card.column === c.id).sort(byOrder).map(card => this.card(t, card, readonly)), shut = closed.includes(c.id);
+      const cards = visible.filter(card => this.where(card) === c.id).sort(listed(c.id)).map(card => this.card(t, card, readonly)), shut = closed.includes(c.id);
       const toggle = (_e, cx) => this.setView({ closed: shut ? closed.filter(id => id !== c.id) : [...closed, c.id] }, cx);
       const dot = div().size(8).flex_none().rounded(4).bg(t[DOT[c.id]]), count = div().text_size(11).text_color(t.dim).child(String(cards.length));
       // Side by side, a collapsed status is a strip with its title turned a quarter.
@@ -688,23 +737,25 @@ export default class Board extends View {
         .child(button("board-setup", "⚙").tooltip("Settings").on_click((_e, cx) => { this.keys.focus(); openSetup(this, cx); }))
         .child(button("board-view", rows ? "Columns" : "Rows").tooltip(rows ? "Statuses side by side" : "Statuses top to bottom").on_click((_e, cx) => this.setView({ rows: !rows }, cx)))
         .child(button("board-close", "✕").on_click(() => { run("layout.hide", { id: "board" }); })))
-      // The filter: every word typed must be in a task's id, title, agent or text. Board and Archive alike.
+      // Search: every word typed must be in a task's id, title, agent or text. Board and Archive follow as you type.
       .when(this.cards.length > 0, el => el.child(h_flex().h(36).flex_none().px(10).gap(6).items_center().border_b(1).border_color(t.border)
-        .child(Input.new(this.query).flex_1().h(26).px(8).rounded(6).border_1().border_color(query ? t.accent : t.border).bg(t.background).text_size(12.5).text_color(t.foreground))
+        .child(div().id("board-search").flex_1().min_w(0).cursor_text().on_mouse_down("left", () => { this.query.focus(); })
+          .child(Input.new(this.query).w_full().h(26).px(8).rounded(6).border_1().border_color(query ? t.accent : t.border).bg(t.background).text_size(12.5).text_color(t.foreground)))
         .when(Boolean(query), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${visible.length} of ${this.cards.length}`))
-          .child(button("board-filter-clear", "Clear").on_click((_e, cx) => { this.query.set_value(""); cx.notify(); })))))
+          .child(button("board-search-clear", "Clear").on_click((_e, cx) => { this.query.set_value(""); cx.notify(); })))))
       .child(v_flex().relative().flex_1().min_h(0)
         .child(empty ? div().p(14).text_size(12).text_color(t.dim).child(empty)
           : tab === "archive" ? v_flex().id("board-archive").flex_1().min_h(0).p(10).gap(8).overflow_y_scrollbar()
             .children(archived.length ? archived.map(card => this.card(t, card, readonly)) : [div().p(4).text_size(12).text_color(t.dim).child("Nothing in the archive. Done tasks go here from their archive button, or by themselves if ⚙ says so.")])
           : rows ? v_flex().id("board-rows").flex_1().min_h(0).p(10).gap(8).overflow_y_scrollbar().children(COLUMNS.map(column))
           : h_flex().id("board-columns").flex_1().min_h(0).p(10).gap(8).overflow_x_scrollbar().children(COLUMNS.map(column)))
-        .when(Boolean(shown) && !this.form && !this.setup, el => el.child(this.task(t, shown, readonly)))
-        .when(Boolean(this.setup) && !this.form, el => el.child(this.over(t, "board-setup-panel", closeSetup, renderSetup(this, t, closeSetup))))
+        // One panel at a time, the topmost: a panel drawn over another scrolling one can come out underneath it.
+        .when(Boolean(shown) && !this.form && !this.setup && !this.back && !this.question, el => el.child(this.task(t, shown, readonly)))
+        .when(Boolean(this.setup) && !this.form && !this.question, el => el.child(this.over(t, "board-setup-panel", closeSetup, renderSetup(this, t, closeSetup))))
         // No close on a click beside it: that would throw away what was typed.
-        .when(Boolean(this.form), el => el.child(this.over(t, "board-new", null, renderForm(this, t))))
-        .when(Boolean(this.back), el => el.child(this.over(t, "board-back", null, this.backPanel(t))))
-        // Last, so it sits over an opened task too.
+        .when(Boolean(this.form) && !this.question, el => el.child(this.over(t, "board-new", null, renderForm(this, t))))
+        .when(Boolean(this.back) && !this.question, el => el.child(this.over(t, "board-back", null, this.backPanel(t))))
+        // A question takes the place of whatever it is about, and gives it back when answered.
         .when(Boolean(this.question), el => el.child(this.asked(t))));
   }
 }
