@@ -1,0 +1,7 @@
+<!-- A barn, for the archive: where done tasks are put away for the night. Drawn for Kanbaa.
+     Kept to an outline, a door and a hayloft hatch: at 14 to 16px anything more turns into a blob. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3 21V10l3-5 6-3 6 3 3 5v11Z" />
+  <path d="M9 21v-6h6v6" />
+  <path d="M10.5 9.5h3" />
+</svg>
