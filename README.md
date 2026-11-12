@@ -23,6 +23,7 @@ to-do/KAN-3-rate-limit-the-public-api.md
 
   **Status:** Ready                  <- which pen it stands in
   **Agent:** claude                  <- who gets sent after it
+  **Model:** opus                    <- on which model (optional)
 
   Limit each key to 60 requests      <- the description, as long
   a minute and answer 429 above.        as you like
@@ -42,10 +43,11 @@ Since it is all files, whatever works on files works on your board: git history 
 
 ## What you get
 
-- Five statuses (Backlog, Ready, In progress, Review, Done), side by side or stacked, each collapsible.
+- Five statuses (Backlog, Ready, In progress, Review, Done), side by side or stacked, each collapsible. Drag a card to another status or to a new place in its own.
 - Task ids from the repo's name (`KAN-12`), in the file name, never reused.
 - A detail view where the title, description, status, agent and pickup edit in place and save themselves.
-- A result block and file links for review, with Send back and Mark as done.
+- A model per task (or per agent, in the settings) for Claude Code, Codex and Hermes.
+- A result block, a folded write-up and file links for review, with Send back, Mark as done and a Reply button that takes you to the agent's own terminal when it needs you.
 - Search across ids, titles, agents and text; ▲ and ▼ to order a status.
 - An archive, by hand or by itself after an hour, a day or a week.
 - A script and a skill so that Claude Code, Codex and Hermes can create and move tasks themselves.
@@ -74,7 +76,8 @@ It lives in `mods/kanbaa/` and shares its code with the board, so a task an agen
 Kanbaa is a Herdr mod, and Herdr mods are trusted code. So that nothing comes as a surprise:
 
 - It reads the `to-do` folder of the repo you are looking at, and writes, creates and deletes Markdown files there when you move, edit, add or delete tasks.
-- It runs `git`, and PowerShell or `sh`, to find the repo and list that folder.
+- It runs `git`, and PowerShell or `sh`, to find the repo and list that folder, and `hc` to label an agent's terminal, read its last lines (to see that it hit a usage limit) and type to it.
+- It reads `~/.codex/models_cache.json`, once, to list Codex's models, if that file exists.
 - It keeps one small counter of the ids it has handed out, in the repo's `.git` folder.
 - It opens a tab for an agent you send after a task, types one line into that agent's terminal when you send its task back, and closes its tab when you mark the task done.
 - Only if you ask it to in the settings, it writes a skill into `~/.claude/skills` or Hermes's skills, or a marked section into `~/.codex/AGENTS.md`, and removes them again when you untick them.

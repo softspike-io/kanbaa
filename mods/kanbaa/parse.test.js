@@ -1,7 +1,7 @@
 // node --test mods/kanbaa/parse.test.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { column, parse, pick, setStatus, setAgent, setManual, description, setDescription, setTitle, prefix, repoName, taskId, nextId, results, splitResult, setBody, addFeedback, setOrder, byOrder, matches, issue, issuedIn, counterPath, newTask, MAX_FILES } from "./parse.js";
+import { column, parse, pick, setStatus, setAgent, setModel, modelId, withModel, codexModels, setManual, description, setDescription, setTitle, prefix, repoName, taskId, nextId, results, splitResult, setBody, addFeedback, setOrder, byOrder, dropOrder, matches, issue, issuedIn, counterPath, newTask, hitLimit, MAX_FILES } from "./parse.js";
 
 test("the five status sources, in order", () => {
   assert.equal(parse("# T\n\n**Status:** Ready\n\n- [x] a\n", "completed/t.md").column, "ready");
@@ -74,6 +74,31 @@ test("pick", () => {
   assert.deepEqual([many.files.length, many.capped], [MAX_FILES, true]);
 });
 
+test("model", () => {
+  assert.equal(parse("# T\n\n**Status:** Ready\n**Agent:** claude\n**Model:** opus\n", "a.md").model, "opus");
+  assert.equal(parse("# T\n**Model:** --dangerously-skip-permissions\n", "a.md").model, ""); // never a flag
+  assert.equal(modelId(" claude-opus-5-5[1m] "), "claude-opus-5-5[1m]");
+  assert.equal(modelId("a b"), "");
+  assert.equal(setModel("# T\n\n**Status:** Ready\n**Agent:** claude\n\nb\n", "opus"), "# T\n\n**Status:** Ready\n**Agent:** claude\n**Model:** opus\n\nb\n");
+  assert.equal(setModel("# T\r\n**Agent:** claude\r\n**Model:** opus\r\n", "sonnet"), "# T\r\n**Agent:** claude\r\n**Model:** sonnet\r\n");
+  assert.equal(setModel("# T\n**Agent:** claude\n**Model:** opus\n\nb\n", ""), "# T\n**Agent:** claude\n\nb\n");
+  assert.equal(setModel("---\nstatus: ready\nagent: codex\n---\n# T\n", "gpt-6"), "---\nstatus: ready\nagent: codex\nmodel: gpt-6\n---\n# T\n");
+  // Another agent: the model goes. The same agent again: it stays.
+  assert.equal(setAgent("# T\n**Agent:** claude\n**Model:** opus\n", "codex"), "# T\n**Agent:** codex\n");
+  assert.equal(setAgent("# T\n**Agent:** claude\n**Model:** opus\n", "claude"), "# T\n**Agent:** claude\n**Model:** opus\n");
+  assert.deepEqual(withModel(["claude"], "claude", "opus"), ["claude", "--model", "opus"]);
+  assert.deepEqual(withModel(["codex", "--no-daemon"], "codex", "gpt-6"), ["codex", "--no-daemon", "-m", "gpt-6"]);
+  assert.deepEqual(withModel(["claude"], "claude", ""), ["claude"]);
+  assert.deepEqual(withModel(["claude"], "claude", "-x"), ["claude"]);
+  assert.deepEqual(withModel(["gemini"], "gemini", "pro"), ["gemini"]); // no known flag
+  assert.deepEqual(codexModels('{"models":[{"slug":"gpt-6","display_name":"GPT-6","visibility":"list"},{"slug":"x","visibility":"hide"}]}'), [{ key: "gpt-6", label: "GPT-6" }]);
+  assert.deepEqual(codexModels("not json"), []);
+  const made = newTask({ title: "T", column: "ready", agent: "claude", model: "opus", date: "2026-11-12" });
+  assert.equal(made.text, "# T\n\n**Status:** Ready\n**Agent:** claude\n**Model:** opus\n**Written:** 2026-11-12\n");
+  assert.equal(parse(made.text, made.name).model, "opus");
+  assert.ok(!newTask({ title: "T", column: "ready", agent: "", model: "opus", date: "2026-11-12" }).text.includes("Model")); // no agent, no model
+});
+
 test("newTask writes a file the board reads back", () => {
   const { name, text } = newTask({ title: "  Fix the Login: bug!  ", description: "Short\nnote\n", column: "ready", agent: "claude", date: "2026-11-11" });
   assert.equal(name, "fix-the-login-bug.md");
@@ -134,8 +159,13 @@ test("results lists the files under ## Result", () => {
   assert.deepEqual(results("# T\n\nNo result yet, only `a.md`.\n"), []);
   assert.deepEqual(results("## Result\r\n- `README.md`"), ["README.md"]);
   assert.deepEqual(splitResult("Do it.\n\n## Result\n\nAdded the limiter.\nTests pass.\n\n- `src/limit.js`\n- [docs](docs/limits.md)\n- kept the old `flag` name\n\n## Notes\n\nLater."),
-    { body: "Do it.\n\n## Notes\n\nLater.", result: "Added the limiter.\nTests pass.\n\n- kept the old `flag` name", found: true });
-  assert.deepEqual(splitResult("Nothing yet."), { body: "Nothing yet.", result: "", found: false });
+    { body: "Do it.\n\n## Notes\n\nLater.", result: "Added the limiter.\nTests pass.\n\n- kept the old `flag` name", details: "", found: true });
+  assert.deepEqual(splitResult("Nothing yet."), { body: "Nothing yet.", result: "", details: "", found: false });
+  // The long write-up (## Details, or the older ## Research / ## Review) leaves the description too, and an edit keeps it.
+  const long = "# T\n\n**Status:** In review\n\nAsk.\n\n## Research\n\n### Options\n\nA or B.\n\n## Result\n\nB.\n\n- `a.md`\n\n## Feedback\n\n- d1: why\n";
+  assert.deepEqual(splitResult(description(long)), { body: "Ask.\n\n## Feedback\n\n- d1: why", result: "B.", details: "### Options\n\nA or B.", found: true });
+  assert.deepEqual(splitResult("Ask.\n\n## Details\n\nOnly this."), { body: "Ask.", result: "", details: "Only this.", found: true });
+  assert.equal(setBody(long, "New ask."), "# T\n\n**Status:** In review\n\nNew ask.\n\n## Research\n\n### Options\n\nA or B.\n\n## Result\n\nB.\n\n- `a.md`\n");
   const task = "# T\r\n\r\n**Status:** In review\r\n\r\nOld ask.\r\n\r\n## Result\r\n\r\nDid it.\r\n\r\n- `a.md`\r\n";
   assert.equal(setBody(task, "New ask.\nSecond line."), "# T\r\n\r\n**Status:** In review\r\n\r\nNew ask.\r\nSecond line.\r\n\r\n## Result\r\n\r\nDid it.\r\n\r\n- `a.md`\r\n");
   assert.equal(setBody(task, "Old ask."), task);
@@ -182,4 +212,23 @@ test("filter and cap", () => {
   const names = Array.from({ length: MAX_FILES + 2 }, (_, i) => `HER-${i + 1}-x.md`), times = Object.fromEntries(names.map((n, i) => [n, i]));
   const kept = pick(names, times);
   assert.deepEqual([kept.capped, kept.files.length, kept.files.includes("HER-1-x.md"), kept.files.includes(`HER-${MAX_FILES + 2}-x.md`), kept.files[0]], [true, MAX_FILES, false, true, "HER-3-x.md"]);
+});
+
+test("where a dropped card lands", () => {
+  const [a, b, c] = ["a.md", "b.md", "c.md"].map(rel => ({ rel })), x = { rel: "x.md" }, rels = list => list.map(card => card.rel).join(" ");
+  assert.equal(rels(dropOrder([a, b, c], a, "c.md", true)), "b.md c.md a.md");
+  assert.equal(rels(dropOrder([a, b, c], c, "a.md", false)), "c.md a.md b.md");
+  assert.equal(rels(dropOrder([a, b, c], a, "b.md", false)), "a.md b.md c.md"); // just before its neighbour: where it was
+  assert.equal(rels(dropOrder([a, b, c], x, "b.md", true)), "a.md b.md x.md c.md"); // from another status
+  assert.equal(rels(dropOrder([a, b, c], x)), "a.md b.md c.md x.md"); // on the status itself: the end
+  assert.equal(rels(dropOrder([a, b], x, "gone.md", false)), "a.md b.md x.md");
+  assert.equal(rels(dropOrder([], x)), "x.md");
+});
+
+test("a screen that stopped on a usage limit", () => {
+  for (const line of ["Claude usage limit reached. Your limit will reset at 3pm.", "5-hour limit reached ∙ resets 3pm", "You've hit your usage limit. Try again at 9:00.", "You've hit your limit · resets 4am"])
+    assert.equal(hitLimit(`● Working on it\n\n${line}\n\n> \n`), true, line);
+  assert.equal(hitLimit("● Added the rate limiter and its tests.\n\n> \n"), false);
+  assert.equal(hitLimit("● You've hit your usage\n  limit. Try again at 9:00.\n\n> \n"), true); // wrapped in a narrow pane
+  assert.equal(hitLimit(`Claude usage limit reached.\n${"● later line\n".repeat(12)}`), false); // scrolled away: an old one
 });

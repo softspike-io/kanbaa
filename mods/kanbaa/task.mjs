@@ -3,17 +3,17 @@
 // (parse.js). Not part of the mod: Herdr never loads it.
 //
 //   node task.mjs new --title "Fix the login bug" [--description "…" | --description -]
-//                     [--status backlog|ready|progress|review|done] [--agent claude] [--manual] [--repo <folder>]
+//                     [--status backlog|ready|progress|review|done] [--agent claude] [--model opus] [--manual] [--repo <folder>]
 //   node task.mjs move <ID | file.md> <backlog|ready|progress|review|done> [--repo <folder>]
 //
 // Run inside the repo (or pass --repo). --description - reads it from stdin. Prints the id and the path.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { COLUMNS, column, counterPath, issue, issuedIn, newTask, nextId, repoName, setStatus, taskId } from "./parse.js";
+import { COLUMNS, column, counterPath, issue, issuedIn, modelId, newTask, nextId, repoName, setStatus, taskId } from "./parse.js";
 
 const DIRS = ["to-do", "todo", "docs/to-do", "docs/todo"]; // as main.js list()
-const USAGE = "Usage: task.mjs new --title <title> [--description <text|->] [--status <status>] [--agent <key>] [--manual] [--repo <folder>]\n       task.mjs move <ID | file.md> <status> [--repo <folder>]";
+const USAGE = "Usage: task.mjs new --title <title> [--description <text|->] [--status <status>] [--agent <key>] [--model <id>] [--manual] [--repo <folder>]\n       task.mjs move <ID | file.md> <status> [--repo <folder>]";
 
 function fail(message) {
   console.error(`task: ${message}`);
@@ -61,7 +61,8 @@ const files = folder => !existsSync(folder) ? [] : readdirSync(folder, { withFil
 const [command, ...argv] = process.argv.slice(2);
 
 if (command === "new") {
-  const args = read(argv, ["title", "description", "status", "agent", "repo"]);
+  const args = read(argv, ["title", "description", "status", "agent", "model", "repo"]);
+  if (args.model && (!args.agent || !modelId(args.model))) fail(args.agent ? `"${args.model}" does not look like a model id` : "--model needs --agent: a model belongs to an agent");
   if (!args.title?.trim() || args.rest.length) fail(`new needs --title\n${USAGE}`);
   const at = place(args.repo), col = status(args.status, "backlog");
   mkdirSync(at.folder, { recursive: true });
@@ -69,7 +70,7 @@ if (command === "new") {
   // The counter of ids handed out, shared with the board: a deleted task's number is not used again.
   const counted = existsSync(at.counter) ? readFileSync(at.counter, "utf8") : null;
   const date = new Date(), two = n => String(n).padStart(2, "0"), id = nextId(at.name, files(at.folder), issuedIn(counted, at.name));
-  const { name, text } = newTask({ title: args.title, description, column: col, agent: args.agent ?? "", manual: args.manual, id,
+  const { name, text } = newTask({ title: args.title, description, column: col, agent: args.agent ?? "", model: args.model ?? "", manual: args.manual, id,
     date: `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}` });
   try { writeFileSync(join(at.folder, name), text, { flag: "wx" }); } // wx: never over an existing task
   catch (e) { fail(`could not create ${at.dir}/${name}: ${e.message}`); }

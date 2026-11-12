@@ -4,15 +4,20 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { exec, writeTextFile, window } from "herdr";
-import { newTask } from "./parse.js";
-import { choices, SELECTORS, label, dropdown } from "./ui.js";
+import { newTask, modelId, MODEL_FLAG } from "./parse.js";
+import { choices, modelChoices, SELECTORS, label, dropdown } from "./ui.js";
 
 export const today = () => { const d = new Date(), two = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`; };
-const task = f => newTask({ title: f.title.value(), description: f.text.value(), column: f.status, agent: f.agent, date: today(), manual: f.pickup === "manual", id: f.id });
+// A typed id wins over the picked one. Only for an agent the board can start on a model.
+const model = f => MODEL_FLAG[f.agent] ? f.custom.value().trim() || f.model : "";
+const task = f => newTask({ title: f.title.value(), description: f.text.value(), column: f.status, agent: f.agent, model: model(f), date: today(), manual: f.pickup === "manual", id: f.id });
 
 // From a click: input states need a live host call.
 export function openForm(view, create, cx) {
-  const f = view.form = { status: "backlog", agent: "", ...create, pickup: "agents", open: null, error: null, busy: false };
+  const f = view.form = { status: "backlog", agent: "", ...create, model: "", pickup: "agents", open: null, error: null, busy: false };
+  f.of = f.agent;
+  f.custom = InputState.new({ placeholder: "Or type a model id" });
+  f.custom.on("change", (_e, cx) => { f.error = null; cx.notify(); });
   f.title = InputState.new({ placeholder: "What needs doing" });
   f.text = TextareaState.new({ placeholder: "A short description (optional)", rows: 5 });
   f.title.on("change", (_e, cx) => { f.error = null; cx.notify(); });
@@ -24,7 +29,7 @@ export function openForm(view, create, cx) {
 }
 
 export function closeForm(view) {
-  view.form?.title.release(); view.form?.text.release();
+  view.form?.title.release(); view.form?.text.release(); view.form?.custom.release();
   view.form = null;
 }
 
@@ -32,6 +37,7 @@ function submit(view, cx) {
   const f = view.form;
   if (f.busy) return;
   if (!f.title.value().trim()) { f.error = "Give the task a title"; return void cx.notify(); }
+  if (model(f) && !modelId(model(f))) { f.error = "That does not look like a model id"; return void cx.notify(); }
   const dir = f.dir ?? "to-do", { name, text } = task(f), folder = `${f.root}/${dir}`;
   f.busy = true;
   cx.spawn(async cx => {
@@ -52,6 +58,8 @@ function submit(view, cx) {
 
 export function renderForm(view, t) {
   const f = view.form, options = choices(f.agents);
+  // A model belongs to its agent: another agent starts at Default again.
+  if (f.of !== f.agent) { f.of = f.agent; f.model = ""; }
   const field = el => el.px(10).rounded(9).border_1().border_color(t.input).bg(t.background).text_size(12.8).text_color(t.foreground);
   const button = (id, text, primary) => div().id(id).px(10).h(26).flex_none().flex().items_center().rounded(6).cursor_pointer().text_size(12)
     .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised).text_color(primary ? t.solid_foreground : t.foreground)
@@ -67,6 +75,10 @@ export function renderForm(view, t) {
     .child(field(Textarea.new(f.text).w_full().py(8)))
     // Stacked, as in a task's edit mode: side by side their labels are cut off in a narrow board.
     .children(SELECTORS.map(([id, name]) => h_flex().child(dropdown(t, f, id, name, options[id]))))
+    // Only under an agent the board can start on a model: what it is started on, picked or typed.
+    .when(Boolean(MODEL_FLAG[f.agent]), el => el
+      .child(h_flex().child(dropdown(t, f, "model", "Model", modelChoices(f.models?.[f.agent] ?? [], "", f.defaults?.[f.agent]))))
+      .child(div().pt(6).child(field(Input.new(f.custom).h(34)))))
     .child(h_flex().pt(14).gap(8).items_center()
       .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(f.error ? t.blocked : t.dim)
         .child(f.error ?? `${f.dir ?? "to-do (new folder)"}/${f.title.value().trim() ? task(f).name : `${f.id}-….md`}`))

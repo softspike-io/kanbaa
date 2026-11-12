@@ -13,6 +13,22 @@ export const ARCHIVE = { id: "archive", label: "Archive", word: "Archived" };
 export const MAX_FILES = 200;
 const HEAD = 30; // **Status:** and **Agent:** count only in the first lines
 
+// The agents the board can start on a chosen model, and the flag each takes for it (from their own --help).
+export const MODEL_FLAG = { claude: "--model", codex: "-m", hermes: "-m" };
+// The models on offer per agent. Claude Code's are its aliases, which follow the latest version by
+// themselves. Codex's come from its own cache (codexModels()); any other id can be typed.
+export const MODELS = { claude: [{ key: "fable", label: "Fable" }, { key: "opus", label: "Opus" }, { key: "sonnet", label: "Sonnet" }, { key: "haiku", label: "Haiku" }] };
+// A model id ends up as an argument of the agent's command, and a task file can come from anywhere:
+// only what looks like an id counts, and never something that reads as a flag.
+export const modelId = value => /^[a-z0-9][\w.:\/@\[\]-]{0,79}$/i.test((value ?? "").trim()) ? value.trim() : "";
+// The models in ~/.codex/models_cache.json that Codex's own menu lists.
+export function codexModels(text) {
+  try { return (JSON.parse(text).models ?? []).filter(m => m.visibility !== "hide" && modelId(m.slug)).map(m => ({ key: m.slug, label: m.display_name || m.slug })); }
+  catch { return []; }
+}
+// The agent's start command on that model: unchanged without one, or for an agent with no known flag.
+export const withModel = (run, agent, model) => MODEL_FLAG[agent] && modelId(model) ? [...run, MODEL_FLAG[agent], modelId(model)] : run;
+
 // Review is tested first: "Done — pending review" is not done.
 export function column(status) {
   const s = (status ?? "").trim().toLowerCase();
@@ -77,11 +93,13 @@ export function parse(text, rel) {
     order: (o => o && o.value !== "" && Number.isFinite(Number(o.value)) ? Number(o.value) : null)(field(parts, "Order")),
     // The header's other **Key:** lines (Written, Repo, …), for show: the board never rewrites them.
     meta: parts.slice(0, descriptionAt(parts)).map((line, i) => i % 2 ? null : /^\*\*([^*]+?):?\*\*:?[ \t]*(.*?)[ \t]*$/.exec(line))
-      .filter(m => m && m[2] && !/^(status|agent|order)$/i.test(m[1])).map(m => ({ key: m[1], value: m[2].replace(/`/g, "") })),
+      .filter(m => m && m[2] && !/^(status|agent|order|model)$/i.test(m[1])).map(m => ({ key: m[1], value: m[2].replace(/`/g, "") })),
     column: col.id,
     // The status as written, when it says more than the column does.
     note: said && ![col.label, col.word].some(w => w.toLowerCase() === said.toLowerCase()) ? said : "",
     agent: agent?.value ?? "",
+    // The model its agent is started on; "": the default from ⚙, else the agent's own.
+    model: modelId(field(parts, "Model")?.value),
     ticked, boxes: boxes.length,
     // Only as a notice at the top: a file that merely mentions the phrase further down is not gated.
     manual: noticeAt(parts) >= 0,
@@ -167,14 +185,24 @@ export function setStatus(text, word) {
   return parts.join("");
 }
 
-// key "": unassigned.
+// The model the task's agent is started on: a **Model:** line under the Agent line, or none ("": the default).
+export function setModel(text, id) {
+  const parts = split(text), f = field(parts, "Model"), a = field(parts, "Agent") ?? field(parts, "Status");
+  if (!id) { if (f) parts.splice(f.i, 2); return parts.join(""); }
+  if (f) put(parts, f, "Model", id);
+  else if (a) under(parts, a.i, a.front ? `model: ${id}` : `**Model:** ${id}`);
+  else block(parts, `**Model:** ${id}`);
+  return parts.join("");
+}
+
+// key "": unassigned. A model belongs to its agent: another agent takes the Model line away.
 export function setAgent(text, key) {
   const parts = split(text), f = field(parts, "Agent"), s = field(parts, "Status");
   if (f) put(parts, f, "Agent", key);
   else if (!key) return text;
   else if (s) under(parts, s.i, s.front ? `agent: ${key}` : `**Agent:** ${key}`);
   else block(parts, `**Agent:** ${key}`);
-  return parts.join("");
+  return (f?.value ?? "") === key ? parts.join("") : setModel(parts.join(""), "");
 }
 
 // The card's place in its status: an **Order:** line under the Status line (or the title), or none (null).
@@ -188,6 +216,13 @@ export function setOrder(text, order) {
 }
 // How a status lists its cards: placed ones first, lowest on top, then the rest by name.
 export const byOrder = (a, b) => (a.order ?? Infinity) - (b.order ?? Infinity) || a.rel.localeCompare(b.rel, undefined, { numeric: true });
+// A status's cards (`same`, in order) as they stand once `card` is dropped there: before or after the
+// card `on` (its rel), or at the end when dropped on the status itself or on a card no longer there.
+export function dropOrder(same, card, on, after) {
+  const list = same.filter(c => c.rel !== card.rel), at = on ? list.findIndex(c => c.rel === on) : -1;
+  list.splice(at < 0 ? list.length : at + (after ? 1 : 0), 0, card);
+  return list;
+}
 
 // Adds the notice under the title, or removes the line that carries it (and the blank line after it).
 export function setManual(text, on) {
@@ -199,21 +234,25 @@ export function setManual(text, on) {
 
 // The "## Result" section an agent ends its work with: up to the next heading of that level, or the end.
 const RESULT = /^##[ \t]+Results?[ \t]*\r?\n([\s\S]*?)(?=^##[ \t]|(?![\s\S]))/im;
+// The longer write-up an agent keeps out of its Result. "Research" and "Review" are what agents called it before "Details".
+// ponytail: only the first such section is taken; a second one stays in the description.
+const DETAILS = /^##[ \t]+(?:Details|Research|Review)[ \t]*\r?\n([\s\S]*?)(?=^##[ \t]|(?![\s\S]))/im;
 
-// A description split at that section: the text without it, and the section's own text without the
-// bullets that only name a file (the board lists those as links, see results()).
+// A description split at the agent's sections: the text without them, the Details text, and the Result's
+// own text without the bullets that only name a file (the board lists those as links, see results()).
 export function splitResult(text) {
-  const section = RESULT.exec(text);
-  if (!section) return { body: text, result: "", found: false };
-  const result = section[1].split(/\r?\n/).filter(line => !/^\s*[-*+]\s+(`[^`\n]+`|\[[^\]]*\]\([^)]+\))\s*$/.test(line)).join("\n").trim();
-  return { body: (text.slice(0, section.index) + text.slice(section.index + section[0].length)).trim(), result, found: true };
+  const cut = re => { const m = re.exec(text); if (m) text = text.slice(0, m.index) + text.slice(m.index + m[0].length); return m; };
+  const d = cut(DETAILS), r = cut(RESULT);
+  if (!d && !r) return { body: text, result: "", details: "", found: false };
+  const result = (r?.[1] ?? "").split(/\r?\n/).filter(line => !/^\s*[-*+]\s+(`[^`\n]+`|\[[^\]]*\]\([^)]+\))\s*$/.test(line)).join("\n").trim();
+  return { body: text.trim(), result, details: d?.[1].trim() ?? "", found: true };
 }
 
-// Replaces the description around its "## Result" section and keeps that section, at the end, as the
-// agent wrote it: what a person edits in a task under review is the description, not the agent's result.
+// Replaces the description around the agent's sections and keeps those, at the end and in their order, as
+// the agent wrote them: what a person edits in a task under review is the description, not the agent's text.
 export function setBody(text, body) {
-  const section = RESULT.exec(description(text));
-  return setDescription(text, section ? `${body.trim()}\n\n${section[0].trim()}` : body);
+  const full = description(text), kept = [DETAILS, RESULT].map(re => re.exec(full)).filter(Boolean).sort((a, b) => a.index - b.index).map(m => m[0].trim());
+  return setDescription(text, kept.length ? [body.trim(), ...kept].join("\n\n") : body);
 }
 
 // The files an agent lists under "## Result" when it finishes: every `quoted` or [linked](path) entry in
@@ -233,14 +272,14 @@ export function matches(card, query) {
 }
 
 // path: relative to the repo root.
-export const startPrompt = (path, back = false) => `Work on the task described in \`${path}\`. Follow the constraints written in that file. Do not commit, push or merge unless the file says you may. When the work is finished, add a \`## Result\` section at the end of that file: two or three lines on what you did, then one bullet per file you created or changed, its path relative to the repo root in backticks. Then, after your written summary and as your very last action, set the file's Status line to \`In review\` and stop: the card reaching Review means you are done.${back ? " This task was sent back to you: start with the newest line under the file's Feedback section, and replace the old Result section when you finish." : ""}`;
+export const startPrompt = (path, back = false) => `Work on the task described in \`${path}\`. Follow the constraints written in that file. Do not commit, push or merge unless the file says you may. When the work is finished, add a \`## Result\` section at the end of that file: two or three lines on what you did, then one bullet per file you created or changed, its path relative to the repo root in backticks. Keep the Result short: a longer write-up (research, options, reasoning) goes in a \`## Details\` section just above it. Then, after your written summary and as your very last action, set the file's Status line to \`In review\` and stop: the card reaching Review means you are done. If the person asks for more on this task afterwards, here in the terminal, bring the Result section up to date with what changed before you stop, every time.${back ? " This task was sent back to you: start with the newest line under the file's Feedback section, and replace the old Result section when you finish." : ""}`;
 
 // A new task file in the format the board reads. The name is the title as a slug.
-export function newTask({ title, description, column: id, agent, date, manual, id: uid }) {
+export function newTask({ title, description, column: id, agent, model, date, manual, id: uid }) {
   const clean = title.trim().replace(/\s+/g, " "), body = (description ?? "").trim();
   let slug = clean.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "") || "task";
   if (slug === "readme") slug = "readme-task"; // README.md is never a card
-  return { name: `${uid ? `${uid}-` : ""}${slug}.md`, text: `# ${clean}\n\n${manual ? `${NOTICE}\n\n` : ""}**Status:** ${COLUMNS.find(c => c.id === id).word}\n**Agent:**${agent ? ` ${agent}` : ""}\n**Written:** ${date}\n${body ? `\n${body}\n` : ""}` };
+  return { name: `${uid ? `${uid}-` : ""}${slug}.md`, text: `# ${clean}\n\n${manual ? `${NOTICE}\n\n` : ""}**Status:** ${COLUMNS.find(c => c.id === id).word}\n**Agent:**${agent ? ` ${agent}` : ""}\n${agent && modelId(model) ? `**Model:** ${modelId(model)}\n` : ""}**Written:** ${date}\n${body ? `\n${body}\n` : ""}` };
 }
 
 // What a task sent back says to the agent that is still there, typed into its terminal: one line, since it is pasted.
@@ -255,3 +294,9 @@ export function addFeedback(text, note, date) {
   const end = section.index + section[0].replace(/\s+$/, "").length;
   return text.slice(0, end) + e + line + (text.slice(end) || e);
 }
+
+// Whether an agent's screen says it stopped on a usage limit (Claude Code: "5-hour limit reached",
+// "You've hit your limit"; Codex: "You've hit your usage limit"). Only its last lines count: what it stopped on.
+// ponytail: wording match on the screen, as the programs report nothing else; add a phrase here when one changes its message.
+export const hitLimit = screen => /limit reached|hit (your|the) (\w+ )?limit|limit (will )?resets?\b|out of (credits|tokens)|quota exceeded/i
+  .test(screen.split(/\r?\n/).filter(line => line.trim()).slice(-12).join(" ").replace(/\s+/g, " ")); // one line: a narrow pane wraps the message

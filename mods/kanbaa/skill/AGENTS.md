@@ -16,6 +16,7 @@ It prints the id and the path, for example `HER-12 to-do/HER-12-fix-the-login-bu
 - `--description`: what, why and what done looks like, in Markdown. Use `--description -` and pipe the text in when it has several lines or quotes.
 - `--status`: `backlog` (the default), `ready`, `progress`, `review` or `done`.
 - `--agent`: the agent to assign, by its Herdr key (`claude`, `codex`, …). Leave it out for unassigned.
+- `--model`: the model that agent is started on (`opus`, `sonnet`, a full id). Only with `--agent`, and only when the person named one.
 - `--manual`: marks the task "Manual pickup only", so the board never offers to start an agent on it.
 
 Rules:
@@ -34,7 +35,7 @@ node "{{SCRIPT}}" move HER-12 review
 The first argument is the id, or the file's path for a task without one. The second is `backlog`, `ready`, `progress`, `review` or `done`.
 
 - When you start work on a task, move it to `progress`, unless it is there already (the board does this itself when it starts you).
-- When the work is finished, add a `## Result` section at the end of the task file (replace an older one): two or three lines on what you did, then one bullet per file you created or changed, its path relative to the repo root in backticks. The board shows those files to the person for review.
+- When the work is finished, add a `## Result` section at the end of the task file (replace an older one): two or three lines on what you did, then one bullet per file you created or changed, its path relative to the repo root in backticks. Keep the Result short: a longer write-up (research, options, reasoning) goes in a `## Details` section just above it, which the board shows folded under the result. If the person asks for more on the task afterwards (in the terminal, not through the board), bring the Result section up to date with what changed before you stop, every time: the board shows that section as the task's current state. The board shows those files to the person for review.
 - Then say what you did, and move the task to `review` as your very last action and stop: the card reaching Review tells the person you are done, so nothing should follow it. Never move a task to `done` yourself: accepting the work is the person's call.
 - A task that comes back to you has a `## Feedback` section in its file: the newest line there is why it was sent back. Address it, then replace the Result section and move the task to `review` again.
 - If you stop without finishing, leave it in `progress` and write in the file what is left and why you stopped.

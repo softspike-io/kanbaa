@@ -1,10 +1,12 @@
 // The settings panel, shown over the board the first time it opens and from the header's ⚙ after that
-// (main.js over()). Three sections are the board's own choices (view.view, kept by main.js setView and
+// (main.js over()). All sections but the last are the board's own choices (view.view, kept by main.js setView and
 // saved by the click); the last is which agents get told how to create and move tasks. view.setup is
 // that last section's state: every write there is install-skill.mjs's, and only after its Apply button.
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, appHome } from "herdr";
+import { modelId } from "./parse.js";
+import { dropdown } from "./ui.js";
 
 const TARGETS = [
   { id: "claude", name: "Claude Code", where: "a skill in ~/.claude/skills/kanbaa-task" },
@@ -92,6 +94,7 @@ export function renderSetup(view, t, close) {
   };
   const agents = [["", "None"], ...view.agents.filter(a => a.installed).map(a => [a.key, a.name])];
   const agent = agents.some(([key]) => key === view.view.agent) ? view.view.agent : "";
+  const models = view.agents.filter(a => a.installed && view.models[a.key]?.length);
   const set = name => (key, cx) => view.setView({ [name]: key }, cx);
   return v_flex().px(14).pt(12).pb(10).gap(16)
     .child(h_flex().items_center()
@@ -100,8 +103,19 @@ export function renderSetup(view, t, close) {
     .child(section("Starting tasks",
       choice("start", "When a task with an agent lands in Ready", START, view.view.start ?? "ask", set("start"),
         "For moves and assignments made on this board. The Start buttons always ask."),
-      choice("open", "After sending an agent", BACK, view.view.open ?? "go", set("open")),
+      choice("open", "After sending an agent", BACK, view.view.open ?? "go", set("open"))))
+    .child(section("New tasks",
       choice("agent", "Agent for a new task", agents, agent, set("agent"))))
+    // Only while an installed agent has models to offer: one row per such agent, named after it.
+    .when(models.length > 0, el => el.child(section("Default models",
+      div().text_size(12).text_color(t.muted).child("The model each agent starts on when a task names none. Default leaves the choice to the agent."),
+      ...models.map(a => {
+        const now = modelId(view.view.models?.[a.key]), list = view.models[a.key];
+        // A dropdown, not pills: Codex alone lists more models than fit a row. s.open says which one is open.
+        s[`model-${a.key}`] = now;
+        return h_flex().child(dropdown(t, s, `model-${a.key}`, `Default model for ${a.name}`, [{ key: "", label: "Default" }, ...list, ...(now && !list.some(m => m.key === now) ? [{ key: now, label: now }] : [])],
+          (key, cx) => view.setView({ models: { ...view.view.models, [a.key]: key } }, cx)));
+      }))))
     .child(section("Review",
       choice("back", "After sending a task back", BACK, view.view.back ?? "stay", set("back"))))
     .child(section("Archive",
