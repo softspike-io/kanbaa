@@ -20,7 +20,7 @@ It prints the id and the path, for example `HER-12 to-do/HER-12-fix-the-login-bu
 - `--title` (required): one line, written as the thing to do.
 - `--description`: what, why and what done looks like, in Markdown. Use `--description -` and pipe the text in when it has several lines or quotes.
 - `--status`: `backlog` (the default), `ready`, `progress`, `review` or `done`.
-- `--type`: `bug`, `feature`, `chore`, `research` or `docs`, when the kind of work is clear. Leave it out otherwise.
+- `--type`: `bug`, `feature`, `chore`, `research` or `docs`: the kind of work.
 - `--agent`: the agent to assign, by its Herdr key (`claude`, `codex`, …). Leave it out for unassigned.
 - `--model`: the model that agent is started on (`opus`, `sonnet`, a full id). Only with `--agent`, and only when the person named one.
 - `--manual`: marks the task "Manual pickup only", so the board never offers to start an agent on it.
@@ -30,6 +30,7 @@ Rules:
 - Leave the status at `backlog` unless the person asked for another one. `ready` invites the board to start an agent on the task.
 - Do not assign an agent unless the person named one.
 - One task per piece of work. Put what you already know into the description (files, error text, the decision that is still open) so whoever picks it up does not have to rediscover it.
+- Assign the correct task type: `bug` for something broken, `feature` for new behaviour, `chore` for upkeep, `research` for finding something out, `docs` for writing.
 
 ## Working on a task
 
