@@ -5,7 +5,7 @@ import { v_flex, h_flex, TextView, InputState, Input, TextareaState, Textarea, P
 import { spaces as liveSpaces, panes as livePanes, focused, agents as liveAgents, terminals as liveTerminals, hc, exec, readTextFile, writeTextFile, watchFolder, knownAgents, home, theme, window, layout, run, setShared, notify, openOverlay, nextCommand } from "herdr";
 import { COLUMNS, ARCHIVE, parse, pick, description, setDescription, setTitle, nextId, repoName, results, splitResult, setBody, addFeedback, backPrompt, setStatus, setAgent, setModel, withModel, codexModels, MODELS, MODEL_FLAG, setManual, setType, TYPES, startPrompt, setOrder, byOrder, dropOrder, matches, issue, issuedIn, counterPath, hitLimit } from "./parse.js";
 import { openForm, closeForm, renderForm, today } from "./form.js";
-import { choices, modelChoices, SELECTORS, TYPE_TINT, label } from "./ui.js";
+import { choices, modelChoices, SELECTORS, TYPE_TINT, label, LIST_H, opensUp } from "./ui.js";
 import { openSetup, renderSetup, checkUpdate } from "./setup.js";
 import { sendBackMessage, restoreBoard } from "./send-back.js";
 
@@ -788,13 +788,13 @@ export default class Board extends View {
     // The open fact's choices float in a Popup under the fact: they cover what is below instead of pushing it down, so the panel keeps its size.
     const fact = ([id, name]) => Popup.new(`fact-pop-${id}`, v_flex().id(`fact-${id}`).rounded(6)
         // Toggled on the press, kept from the panel, which closes an open list on any other press (over()).
-        .when(!readonly, el => el.cursor_pointer().on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); this.pick = this.pick === id ? null : id; cx.notify(); }))
+        .when(!readonly, el => el.cursor_pointer().on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pick = this.pick === id ? null : id; this.pickUp = opensUp(e); cx.notify(); }))
         .child(label(t, name))
         .child(h_flex().gap(4).items_center().text_size(12.8).text_color(this.pick === id ? t.accent : t.foreground)
           .child(div().min_w(0).truncate().child(options[id].find(o => o.key === now[id])?.label ?? now[id]))
           .when(!readonly, el => el.child(div().flex_none().text_size(10).text_color(t.dim).child("▾")))))
-      .flex_1().min_w(0).anchor("top_left")
-      .when(this.pick === id && !readonly, el => el.content(v_flex().id("task-options").w(220).mt(4).p(4).max_h(160).overflow_y_scrollbar()
+      .flex_1().min_w(0).anchor(this.pickUp ? "bottom_left" : "top_left")
+      .when(this.pick === id && !readonly, el => el.content(v_flex().id("task-options").w(220).mt(this.pickUp ? 0 : 4).mb(this.pickUp ? 4 : 0).p(4).max_h(LIST_H).overflow_y_scrollbar()
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).rounded(9).border_1().border_color(t.border).bg(t.raised).shadow_lg().text_size(12.8)
         .children(options[id].map(o => h_flex().id(`option-${o.key}`).h(28).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover))
           .on_click(choose(id, o.key))
