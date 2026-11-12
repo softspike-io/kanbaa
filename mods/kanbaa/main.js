@@ -15,6 +15,9 @@ import { sendBackMessage, restoreBoard } from "./send-back.js";
 // list is read once and shared, as Herdr's own lib/live.js does; elsewhere (clicks, timers, tasks) it is read live.
 // A stopped render runs no `finally`, so a copy older than 250 ms is never used.
 let frame = null;
+// Nothing in the kit occludes (no occlude()), so the board under a panel still saw the pointer: its hover, pointer and
+// tooltips are left off while a panel is open (frame.covered, set in draw). Clicks are the backdrop's (over()).
+const lit = () => !frame?.covered;
 const once = (name, read) => () => frame && Date.now() - frame.at < 250 ? (frame.lists[name] ??= read()) : read();
 const spaces = once("spaces", liveSpaces), panes = once("panes", livePanes), agents = once("agents", liveAgents), terminals = once("terminals", liveTerminals);
 
@@ -318,7 +321,7 @@ export default class Board extends View {
     const working = Boolean(at?.working), wait = waits(card, at, this.limits.get(card.path));
     // Dragging (this.drag, see drop()): the card being dragged dims, the one it would land beside shows a line on that side.
     const col = this.where(card), d = this.drag?.moved ? this.drag : null;
-    return v_flex().id(`card-${card.rel}`).relative().flex_none().p(10).gap(5).rounded(8).bg(t.surface).border_1().border_color(t.border).cursor_pointer().hover(s => s.bg(t.hover))
+    return v_flex().id(`card-${card.rel}`).relative().flex_none().p(10).gap(5).rounded(8).bg(t.surface).border_1().border_color(t.border).when(lit(), el => el.cursor_pointer().hover(s => s.bg(t.hover)))
       .when(d?.rel === card.rel, el => el.opacity(0.5))
       .when(d && d.over.rel === card.rel && d.rel !== card.rel, el => el.child(div().absolute().left(0).right(0).h(2).bg(t.accent)
         .when(d.over.after, line => line.bottom(0)).when(!d.over.after, line => line.top(0))))
@@ -341,10 +344,10 @@ export default class Board extends View {
         // Its place in the status: one up, one down.
         .when(!readonly && PLACED(this.where(card)), el => el.children([["up", "▲", -1], ["down", "▼", 1]].map(([way, sign, delta]) => (delta < 0 ? first : last) ? div().w(16).flex_none() // no button, its room kept so the other one stays put
           : div().id(`${way}-${card.rel}`).w(16).h(20).flex_none().flex().items_center().justify_center().rounded(4).text_size(8).text_color(t.dim)
-            .hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip(`Move ${way}`).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+            .when(lit(), el => el.hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip(`Move ${way}`)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .on_click((_e, cx) => { cx.stop_propagation(); this.moveBy(card, delta, cx); }).child(sign))))
         .when(!readonly, el => el.child(div().id(`more-${card.rel}`).w(20).h(20).flex_none().flex().items_center().justify_center().rounded(5).text_color(t.dim)
-          .hover(s => s.bg(t.raised).text_color(t.foreground)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .when(lit(), el => el.hover(s => s.bg(t.raised).text_color(t.foreground))).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => { cx.stop_propagation(); this.menu(card); }).child("⋯"))))
       .when(Boolean(card.note), el => el.child(div().text_size(11).text_color(t.dim).child(card.note)))
       .when(Boolean(card.type || card.agent || card.boxes || card.manual || working || (!readonly && ["review", "done", "archive"].includes(card.column))), el => el.child(h_flex().gap(6).items_center().text_size(11).text_color(t.muted)
@@ -352,9 +355,9 @@ export default class Board extends View {
         .when(Boolean(agent?.icon), el => el.child(agent.tint ? svg(agent.icon).size(13).flex_none() : image(agent.icon).w(13).h(13).flex_none()))
         // The agent's name goes to its tab while that tab exists.
         .child(h_flex().flex_1().min_w(0).child(div().id(`agent-${card.rel}`).min_w(0).truncate().child(`${agent?.name ?? card.agent}${card.model && card.agent ? ` · ${card.model}` : ""}`)
-          .when(Boolean(at), el => el.cursor_pointer().hover(s => s.text_color(t.accent)).tooltip("Go to its tab")
+          .when(Boolean(at), el => el.when(lit(), el => el.cursor_pointer().hover(s => s.text_color(t.accent)).tooltip("Go to its tab"))
             .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => { cx.stop_propagation(); goTo(at); }))))
-        .when(working, el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900).tooltip("Its agent is still working")))
+        .when(working, el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900).when(lit(), el => el.tooltip("Its agent is still working"))))
         // Its file already says Review: the agent is writing its last words. Not once it has rested
         // (this.released, see follow()): working again then means it was replied to in its terminal.
         .when(working && card.column === "review" && !this.released.has(card.path), el => el.child(div().flex_none().text_color(t.dim).child("finishing")))
@@ -363,22 +366,22 @@ export default class Board extends View {
         // Its agent waits for the person: say so, and offer its terminal.
         .when(Boolean(wait), el => el.child(div().flex_none().text_color(wait === "waiting" ? t.dim : t.blocked).child(wait))
           .child(div().id(`reply-${card.rel}`).px(8).h(24).flex_none().flex().items_center().rounded(6).text_color(t.muted)
-            .hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip("Answer in its terminal").on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+            .when(lit(), el => el.hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip("Answer in its terminal")).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .on_click((_e, cx) => { cx.stop_propagation(); goTo(at); }).child("Reply")))
         // The sheepdog, bottom right: send the agent after this task. Asks first unless ⚙ says otherwise, like every Start button.
         .when(!readonly && Boolean(go), el => el.child(div().id(`go-${card.rel}`).w(28).h(28).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.muted)
-          .hover(s => s.bg(t.raised).text_color(t.accent)).tooltip(`Send ${go.name} after this task`).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .when(lit(), el => el.hover(s => s.bg(t.raised).text_color(t.accent)).tooltip(`Send ${go.name} after this task`)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => { cx.stop_propagation(); this.pressed(card, go, cx); }).child(svg("mods/kanbaa/dog.svg").size(19))))
         // In Review: accept it from the board, the same as the opened task's "Mark as done" (finish() asks first if its agent still works).
         .when(!readonly && card.column === "review", el => el.child(div().id(`done-${card.rel}`).w(28).h(28).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.muted)
-          .hover(s => s.bg(t.raised).text_color(t.done)).tooltip("Mark as done").on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .when(lit(), el => el.hover(s => s.bg(t.raised).text_color(t.done)).tooltip("Mark as done")).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => { cx.stop_propagation(); this.finish(card, cx); }).child(svg("mods/kanbaa/done.svg").size(16))))
         // Done: put it away. Archived: bring it back to Done.
         .when(!readonly && card.column === "done", el => el.child(div().id(`archive-${card.rel}`).w(28).h(28).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.muted)
-          .hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip("Send to archive").on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .when(lit(), el => el.hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip("Send to archive")).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => { cx.stop_propagation(); this.write(card, setStatus(card.text, ARCHIVE.word), cx); }).child(svg("mods/kanbaa/archive.svg").size(16))))
         .when(!readonly && card.column === "archive", el => el.child(div().id(`restore-${card.rel}`).px(8).h(24).flex_none().flex().items_center().rounded(6).text_color(t.muted)
-          .hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip("Back to Done").on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .when(lit(), el => el.hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip("Back to Done")).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => { cx.stop_propagation(); this.write(card, setStatus(card.text, "Done"), cx); }).child("Restore")))));
   }
 
@@ -445,6 +448,15 @@ export default class Board extends View {
     const counter = this.counter, next = counter && id ? issue(counter.text, id) : null;
     if (!next) return;
     cx.spawn(async () => { try { await writeTextFile(counter.path, next, counter.text); counter.text = next; } catch { /* another window got there: the next refresh reads it */ } });
+  }
+
+  // The New task panel, closed from beside it: straight away when empty, else after asking. Cancel gives it back as it was.
+  leaveForm(cx) {
+    const f = this.form;
+    if (!f.title.value().trim() && !f.text.value().trim()) closeForm(this);
+    else this.question = { title: "Discard this new task?", yes: "Discard", detail: "What you typed in the New task panel is lost.", run: () => { if (this.form === f) closeForm(this); } };
+    this.keys.focus(); // Esc answers Cancel
+    cx.notify();
   }
 
   // Esc closes the topmost thing that is open, one at a time. False when nothing was.
@@ -887,6 +899,7 @@ export default class Board extends View {
     this.follow(cx);
     const t = theme(), readonly = Boolean(this.context?.on), { rows, closed } = this.view;
     const shown = this.shown ? this.cards.find(card => card.rel === this.shown) : null;
+    frame.covered = Boolean(shown || this.setup || this.form || this.back || this.question); // see lit()
     const closeSetup = (_e, cx) => { this.setup = null; localStorage.setItem("setup", "1"); cx.notify(); };
     const empty = this.error || (!this.loaded ? "Loading tasks…" : !this.dir ? "No to-do folder in this repo" : !this.cards.length ? "No tasks" : null);
     const button = (id, label) => div().id(id).px(8).h(24).flex_none().flex().items_center().rounded(6).cursor_pointer().text_size(12).text_color(t.muted)
@@ -905,20 +918,20 @@ export default class Board extends View {
         .when(this.drag?.moved && this.drag.over.col === c.id && !this.drag.over.rel, el => el.bg(t.hover));
       const dot = div().size(8).flex_none().rounded(4).bg(t[DOT[c.id]]), count = div().text_size(11).text_color(t.dim).child(String(cards.length));
       // Side by side, a collapsed status is a strip with its title turned a quarter.
-      if (shut && !rows) return takes(v_flex().id(`col-${c.id}`).w(34).flex_none().h_full().pt(16).gap(7).items_center().rounded(10).bg(t.chrome).cursor_pointer()
-        .hover(s => s.bg(t.hover)).on_click(toggle)).child(dot)
+      if (shut && !rows) return takes(v_flex().id(`col-${c.id}`).w(34).flex_none().h_full().pt(16).gap(7).items_center().rounded(10).bg(t.chrome)
+        .when(lit(), el => el.cursor_pointer().hover(s => s.bg(t.hover))).on_click(toggle)).child(dot)
         .child(svg(`mods/kanbaa/label-${c.id}.svg`).w(16.9).h(LABEL[c.id] * 0.13).flex_none().text_color(t.foreground)).child(count);
       const box = takes(v_flex().id(`col-${c.id}`).gap(8).p(8).rounded(10).bg(t.chrome));
       return (rows ? box.flex_none() : box.flex_1().min_w(110).h_full().min_h(0))
-        .child(h_flex().id(`head-${c.id}`).px(4).h(24).flex_none().gap(6).items_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover)).on_click(toggle)
+        .child(h_flex().id(`head-${c.id}`).px(4).h(24).flex_none().gap(6).items_center().rounded(6).when(lit(), el => el.cursor_pointer().hover(s => s.bg(t.hover))).on_click(toggle)
           .child(dot).child(div().font_medium().child(c.label)).child(count)
           // Every done task to the archive at once. Asked first.
           .when(!readonly && c.id === "done" && cards.length > 0, el => el.child(div().flex_1()).child(div().id("archive-all").w(22).h(20).flex_none().flex().items_center().justify_center().rounded(5).text_color(t.dim)
-            .hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip("Send all done tasks to the archive").on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+            .when(lit(), el => el.hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip("Send all done tasks to the archive")).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .on_click((_e, cx) => { cx.stop_propagation(); this.archiveAll(cx); }).child(svg("mods/kanbaa/archive.svg").size(14))))
           // A new task straight into this status. Only where a task starts its life.
           .when(creates && (c.id === "backlog" || c.id === "ready"), el => el.child(div().flex_1()).child(div().id(`add-${c.id}`).w(20).h(20).flex_none().flex().items_center().justify_center().rounded(5).text_color(t.dim)
-            .hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip(`New task in ${c.label}`).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+            .when(lit(), el => el.hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip(`New task in ${c.label}`)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .on_click((_e, cx) => { cx.stop_propagation(); this.newTask(c.id, cx); }).child("+"))))
         .when(!shut && !cards.length && c.id === "backlog", el => el.child(div().px(4).text_size(11).text_color(t.dim).child("Nothing in the baacklog")))
         .when(!shut && (!rows || cards.length > 0), el => el.child(rows ? v_flex().gap(8).children(cards)
@@ -962,8 +975,8 @@ export default class Board extends View {
         // One panel at a time, the topmost: a panel drawn over another scrolling one can come out underneath it.
         .when(Boolean(shown) && !this.form && !this.setup && !this.back && !this.question, el => el.child(this.task(t, shown, readonly)))
         .when(Boolean(this.setup) && !this.form && !this.question, el => el.child(this.over(t, "board-setup-panel", closeSetup, renderSetup(this, t, closeSetup), 640, true)))
-        // No close on a click beside it: that would throw away what was typed.
-        .when(Boolean(this.form) && !this.question, el => el.child(this.over(t, "board-new", null, renderForm(this, t))))
+        // A click beside it closes it; once something is typed it asks first (a drag-select out of a field ends there too).
+        .when(Boolean(this.form) && !this.question, el => el.child(this.over(t, "board-new", (_e, cx) => this.leaveForm(cx), renderForm(this, t))))
         .when(Boolean(this.back) && !this.question, el => el.child(this.over(t, "board-back", null, this.backPanel(t))))
         // A question takes the place of whatever it is about, and gives it back when answered.
         .when(Boolean(this.question), el => el.child(this.asked(t)))
