@@ -10,6 +10,10 @@ export const COLUMNS = [
 ];
 // Not a column: tasks put away. They stay files in the same folder, with this status, and show in the board's Archive.
 export const ARCHIVE = { id: "archive", label: "Archive", word: "Archived" };
+// What kind of work a task is: a **Type:** line under the Status line, written as the label.
+export const TYPES = [{ key: "bug", label: "Bug" }, { key: "feature", label: "Feature" }, { key: "chore", label: "Chore" }, { key: "research", label: "Research" }, { key: "docs", label: "Docs" }];
+// The type a written value names ("bug", "Bug", "Docs"), or "" for none or one the board does not know.
+export const typeOf = value => TYPES.find(t => t.key === (value ?? "").trim().toLowerCase())?.key ?? "";
 export const MAX_FILES = 200;
 const HEAD = 30; // **Status:** and **Agent:** count only in the first lines
 
@@ -81,7 +85,7 @@ function field(parts, name) {
 const heading = parts => { const end = frontEnd(parts); for (let i = end < 0 ? 0 : end + 2; i < parts.length; i += 2) if (parts[i].startsWith("# ")) return i; return -1; };
 
 export function parse(text, rel) {
-  const parts = split(text), status = field(parts, "Status"), agent = field(parts, "Agent"), h = heading(parts);
+  const parts = split(text), status = field(parts, "Status"), agent = field(parts, "Agent"), type = typeOf(field(parts, "Type")?.value), h = heading(parts);
   const boxes = text.match(/^[ \t]*[-*+] \[[ xX]\]/gm) ?? [], ticked = boxes.filter(b => !b.endsWith("[ ]")).length;
   const folder = rel.includes("/") && /^(backlog|ready|in-progress|completed)$/i.test(rel.split("/")[0]) ? rel.split("/")[0] : "";
   const raw = status?.value || folder || (!boxes.length || !ticked ? "Backlog" : ticked < boxes.length ? "In progress" : "Done");
@@ -91,13 +95,14 @@ export function parse(text, rel) {
     id: taskId(rel),
     // Where the card sits in its status: lower first, and cards without the line after those, by id.
     order: (o => o && o.value !== "" && Number.isFinite(Number(o.value)) ? Number(o.value) : null)(field(parts, "Order")),
-    // The header's other **Key:** lines (Written, Repo, …), for show: the board never rewrites them.
+    // The header's other **Key:** lines (Written, Repo, …), for show: the board never rewrites them. A Type it does not know stays here.
     meta: parts.slice(0, descriptionAt(parts)).map((line, i) => i % 2 ? null : /^\*\*([^*]+?):?\*\*:?[ \t]*(.*?)[ \t]*$/.exec(line))
-      .filter(m => m && m[2] && !/^(status|agent|order|model)$/i.test(m[1])).map(m => ({ key: m[1], value: m[2].replace(/`/g, "") })),
+      .filter(m => m && m[2] && !/^(status|agent|order|model)$/i.test(m[1]) && !(type && /^type$/i.test(m[1]))).map(m => ({ key: m[1], value: m[2].replace(/`/g, "") })),
     column: col.id,
     // The status as written, when it says more than the column does.
     note: said && ![col.label, col.word].some(w => w.toLowerCase() === said.toLowerCase()) ? said : "",
     agent: agent?.value ?? "",
+    type,
     // The model its agent is started on; "": the default from ⚙, else the agent's own.
     model: modelId(field(parts, "Model")?.value),
     ticked, boxes: boxes.length,
@@ -205,6 +210,16 @@ export function setAgent(text, key) {
   return (f?.value ?? "") === key ? parts.join("") : setModel(parts.join(""), "");
 }
 
+// key "": no type, the line goes.
+export function setType(text, key) {
+  const parts = split(text), f = field(parts, "Type"), s = field(parts, "Status"), word = TYPES.find(t => t.key === key)?.label;
+  if (!word) { if (f) parts.splice(f.i, 2); return parts.join(""); }
+  if (f) put(parts, f, "Type", word);
+  else if (s) under(parts, s.i, s.front ? `type: ${word}` : `**Type:** ${word}`);
+  else block(parts, `**Type:** ${word}`);
+  return parts.join("");
+}
+
 // The card's place in its status: an **Order:** line under the Status line (or the title), or none (null).
 export function setOrder(text, order) {
   const parts = split(text), f = field(parts, "Order"), s = field(parts, "Status");
@@ -265,9 +280,9 @@ export function results(text) {
   return [...new Set(found)].slice(0, 20);
 }
 
-// A typed filter: every word must be somewhere in the id, title, agent or text.
+// A typed filter: every word must be somewhere in the id, title, agent, type or text.
 export function matches(card, query) {
-  const hay = `${card.id} ${card.title} ${card.agent} ${card.text}`.toLowerCase();
+  const hay = `${card.id} ${card.title} ${card.agent} ${card.type} ${card.text}`.toLowerCase();
   return query.toLowerCase().split(/\s+/).filter(Boolean).every(word => hay.includes(word));
 }
 
@@ -275,11 +290,11 @@ export function matches(card, query) {
 export const startPrompt = (path, back = false) => `Work on the task described in \`${path}\`. Follow the constraints written in that file. Do not commit, push or merge unless the file says you may. When the work is finished, add a \`## Result\` section at the end of that file: two or three lines on what you did, then one bullet per file you created or changed, its path relative to the repo root in backticks. Keep the Result short: a longer write-up (research, options, reasoning) goes in a \`## Details\` section just above it. Then, after your written summary and as your very last action, set the file's Status line to \`In review\` and stop: the card reaching Review means you are done. If the person asks for more on this task afterwards, here in the terminal, bring the Result section up to date with what changed before you stop, every time.${back ? " This task was sent back to you: start with the newest line under the file's Feedback section, and replace the old Result section when you finish." : ""}`;
 
 // A new task file in the format the board reads. The name is the title as a slug.
-export function newTask({ title, description, column: id, agent, model, date, manual, id: uid }) {
+export function newTask({ title, description, column: id, type, agent, model, date, manual, id: uid }) {
   const clean = title.trim().replace(/\s+/g, " "), body = (description ?? "").trim();
   let slug = clean.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "") || "task";
   if (slug === "readme") slug = "readme-task"; // README.md is never a card
-  return { name: `${uid ? `${uid}-` : ""}${slug}.md`, text: `# ${clean}\n\n${manual ? `${NOTICE}\n\n` : ""}**Status:** ${COLUMNS.find(c => c.id === id).word}\n**Agent:**${agent ? ` ${agent}` : ""}\n${agent && modelId(model) ? `**Model:** ${modelId(model)}\n` : ""}**Written:** ${date}\n${body ? `\n${body}\n` : ""}` };
+  return { name: `${uid ? `${uid}-` : ""}${slug}.md`, text: `# ${clean}\n\n${manual ? `${NOTICE}\n\n` : ""}**Status:** ${COLUMNS.find(c => c.id === id).word}\n${typeOf(type) ? `**Type:** ${TYPES.find(t => t.key === typeOf(type)).label}\n` : ""}**Agent:**${agent ? ` ${agent}` : ""}\n${agent && modelId(model) ? `**Model:** ${modelId(model)}\n` : ""}**Written:** ${date}\n${body ? `\n${body}\n` : ""}` };
 }
 
 // What a task sent back says to the agent that is still there, typed into its terminal: one line, since it is pasted.
@@ -300,3 +315,19 @@ export function addFeedback(text, note, date) {
 // ponytail: wording match on the screen, as the programs report nothing else; add a phrase here when one changes its message.
 export const hitLimit = screen => /limit reached|hit (your|the) (\w+ )?limit|limit (will )?resets?\b|out of (credits|tokens)|quota exceeded/i
   .test(screen.split(/\r?\n/).filter(line => line.trim()).slice(-12).join(" ").replace(/\s+/g, " ")); // one line: a narrow pane wraps the message
+
+// Updates (setup.js): the repo an install comes from, and the commit it was copied at, kept in
+// mods/kanbaa/version.json ({ "commit": "<sha>" }) by whoever installs or updates it. The repo itself has none.
+export const REPO = "https://github.com/softspike-io/kanbaa";
+const SHA = /^[0-9a-f]{40}$/;
+// The commit in `git ls-remote <repo> HEAD`'s output, or null.
+export const headOf = out => String(out).match(/^([0-9a-f]{40})\s+HEAD$/m)?.[1] ?? null;
+export function stampOf(text) {
+  try { const c = JSON.parse(text ?? "")?.commit; return SHA.test(c) ? c : null; } catch { return null; }
+}
+// "current", "available", or "unknown" when the install records no commit.
+export const updateState = (installed, latest) => !installed ? "unknown" : installed === latest ? "current" : "available";
+// What the agent sent to update an install is told. home: the Herdr app folder it works in.
+export const updatePrompt = (home, installed, latest) => `Update Kanbaa, the Herdr layout installed in this folder (${home}), from ${REPO}. ${installed
+  ? `The installed copy is commit ${installed}; the newest is ${latest}.`
+  : `The installed copy does not record its version; the newest is commit ${latest}.`} Clone the repo into a temporary folder and read its RECIPE.md${installed ? `, and what changed with \`git log ${installed}..${latest}\` and \`git diff ${installed} ${latest}\`` : ""}. Bring the installed copies of layouts/kanbaa.json, mods/kanbaa, mods/kanbaa-tabs and mods/status-menu up to date, by "Layouts and mods other people made" in AGENTS.md here: an installed one may be renamed, missing or changed by the person, so fit the update to what is there. Before writing anything, tell the person what will change, and ask before replacing a file that differs from ${installed ? "its version at the installed commit" : "the repo's"}. Leave RECIPE.md, README.md, preview.png, the tests and the to-do folder out. Then write mods/kanbaa/version.json as {"commit": "${latest}"}, run \`herdr-app check\` on each mod you changed, and if anything under mods/kanbaa/skill changed, tell the person to press Apply under Agents in Kanbaa's ⚙. Delete the temporary clone when you are done.`;

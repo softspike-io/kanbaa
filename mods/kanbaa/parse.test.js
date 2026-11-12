@@ -1,7 +1,7 @@
 // node --test mods/kanbaa/parse.test.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { column, parse, pick, setStatus, setAgent, setModel, modelId, withModel, codexModels, setManual, description, setDescription, setTitle, prefix, repoName, taskId, nextId, results, splitResult, setBody, addFeedback, setOrder, byOrder, dropOrder, matches, issue, issuedIn, counterPath, newTask, hitLimit, MAX_FILES } from "./parse.js";
+import { column, parse, pick, setStatus, setAgent, setModel, modelId, withModel, codexModels, setManual, description, setDescription, setTitle, prefix, repoName, taskId, nextId, results, splitResult, setBody, addFeedback, setOrder, byOrder, dropOrder, matches, issue, issuedIn, counterPath, newTask, hitLimit, setType, typeOf, MAX_FILES } from "./parse.js";
 
 test("the five status sources, in order", () => {
   assert.equal(parse("# T\n\n**Status:** Ready\n\n- [x] a\n", "completed/t.md").column, "ready");
@@ -231,4 +231,36 @@ test("a screen that stopped on a usage limit", () => {
   assert.equal(hitLimit("● Added the rate limiter and its tests.\n\n> \n"), false);
   assert.equal(hitLimit("● You've hit your usage\n  limit. Try again at 9:00.\n\n> \n"), true); // wrapped in a narrow pane
   assert.equal(hitLimit(`Claude usage limit reached.\n${"● later line\n".repeat(12)}`), false); // scrolled away: an old one
+});
+
+test("update check: the remote head, the install's stamp and what they make", async () => {
+  const { headOf, stampOf, updateState, updatePrompt } = await import("./parse.js");
+  const a = "a".repeat(40), b = "b".repeat(40);
+  assert.equal(headOf(`${a}\tHEAD\n${b}\trefs/heads/main\n`), a);
+  assert.equal(headOf(`${b}\trefs/heads/main\n`), null);
+  assert.equal(headOf("fatal: repository not found"), null);
+  assert.equal(stampOf(`{ "commit": "${a}" }`), a);
+  assert.equal(stampOf(`{ "commit": "--upload-pack=x" }`), null);
+  assert.equal(stampOf("not json"), null);
+  assert.equal(stampOf(null), null);
+  assert.equal(updateState(a, a), "current");
+  assert.equal(updateState(a, b), "available");
+  assert.equal(updateState(null, b), "unknown");
+  assert.match(updatePrompt("/h", a, b), new RegExp(`git diff ${a} ${b}`));
+  assert.doesNotMatch(updatePrompt("/h", null, b), /git diff/);
+  assert.match(updatePrompt("/h", null, b), new RegExp(`"commit": "${b}"`));
+});
+
+test("task type", () => {
+  assert.equal(typeOf(" Bug "), "bug"); assert.equal(typeOf("Design"), ""); assert.equal(typeOf(undefined), "");
+  assert.equal(setType("# T\n\n**Status:** Ready\n**Agent:** claude\n", "research"), "# T\n\n**Status:** Ready\n**Type:** Research\n**Agent:** claude\n");
+  assert.equal(setType("# T\r\n**Status:** Ready\r\n**Type:** Bug\r\n", "docs"), "# T\r\n**Status:** Ready\r\n**Type:** Docs\r\n");
+  assert.equal(setType("# T\n**Status:** Ready\n**Type:** Bug\n\nb\n", ""), "# T\n**Status:** Ready\n\nb\n");
+  assert.equal(setType("---\nstatus: ready\n---\n# T\n", "chore"), "---\nstatus: ready\ntype: Chore\n---\n# T\n");
+  const known = parse("# T\n\n**Status:** Ready\n**Type:** feature\n**Written:** 2026-11-12\n", "t.md");
+  assert.equal(known.type, "feature"); assert.deepEqual(known.meta, [{ key: "Written", value: "2026-11-12" }]);
+  const odd = parse("# T\n\n**Status:** Ready\n**Type:** Design\n", "t.md");
+  assert.equal(odd.type, ""); assert.deepEqual(odd.meta, [{ key: "Type", value: "Design" }]); // unknown: shown as written, not lost
+  assert.equal(newTask({ title: "T", column: "backlog", type: "bug", agent: "", date: "2026-11-12" }).text, "# T\n\n**Status:** Draft\n**Type:** Bug\n**Agent:**\n**Written:** 2026-11-12\n");
+  assert.ok(matches({ id: "", title: "x", agent: "", type: "bug", text: "" }, "bug"));
 });

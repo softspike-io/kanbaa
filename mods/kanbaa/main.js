@@ -1,13 +1,22 @@
 // A Kanban board of the to-do folder in the focused pane's repo: one Markdown file is one card.
 // The files are the only state: a move or an assignment rewrites one line of the file (parse.js).
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, TextView, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { spaces, panes, focused, agents, terminals, hc, exec, readTextFile, writeTextFile, watchFolder, knownAgents, home, theme, window, layout, run, setShared, notify, openOverlay, nextCommand } from "herdr";
-import { COLUMNS, ARCHIVE, parse, pick, description, setDescription, setTitle, nextId, repoName, results, splitResult, setBody, addFeedback, backPrompt, setStatus, setAgent, setModel, withModel, codexModels, MODELS, MODEL_FLAG, setManual, startPrompt, setOrder, byOrder, dropOrder, matches, issue, issuedIn, counterPath, hitLimit } from "./parse.js";
+import { v_flex, h_flex, TextView, InputState, Input, TextareaState, Textarea, Popup } from "gpui-base";
+import { spaces as liveSpaces, panes as livePanes, focused, agents as liveAgents, terminals as liveTerminals, hc, exec, readTextFile, writeTextFile, watchFolder, knownAgents, home, theme, window, layout, run, setShared, notify, openOverlay, nextCommand } from "herdr";
+import { COLUMNS, ARCHIVE, parse, pick, description, setDescription, setTitle, nextId, repoName, results, splitResult, setBody, addFeedback, backPrompt, setStatus, setAgent, setModel, withModel, codexModels, MODELS, MODEL_FLAG, setManual, setType, TYPES, startPrompt, setOrder, byOrder, dropOrder, matches, issue, issuedIn, counterPath, hitLimit } from "./parse.js";
 import { openForm, closeForm, renderForm, today } from "./form.js";
-import { choices, modelChoices, SELECTORS, label } from "./ui.js";
-import { openSetup, renderSetup } from "./setup.js";
+import { choices, modelChoices, SELECTORS, TYPE_TINT, label } from "./ui.js";
+import { openSetup, renderSetup, checkUpdate } from "./setup.js";
 import { sendBackMessage, restoreBoard } from "./send-back.js";
+
+// Herdr stops a render that takes more than about 50 ms ("This view could not be re-rendered"), and each
+// terminals(), agents(), panes() or spaces() call copies the whole list, a few ms with many terminals. A board
+// render asked for them per card, and per card again for its neighbours (where() → tabOf()). Inside render() each
+// list is read once and shared, as Herdr's own lib/live.js does; elsewhere (clicks, timers, tasks) it is read live.
+// A stopped render runs no `finally`, so a copy older than 250 ms is never used.
+let frame = null;
+const once = (name, read) => () => frame && Date.now() - frame.at < 250 ? (frame.lists[name] ??= read()) : read();
+const spaces = once("spaces", liveSpaces), panes = once("panes", livePanes), agents = once("agents", liveAgents), terminals = once("terminals", liveTerminals);
 
 // As the shipped files mod: the focused pane's folder and machine.
 function location() {
@@ -96,8 +105,8 @@ export default class Board extends View {
     this.query.on("focus", () => { this.searching = true; });
     this.query.on("blur", () => { this.searching = false; });
     cx.timer.every(250, cx => { if (this.searching && this.query.value() !== this.searched) cx.notify(); });
-    try { this.view = { rows: false, closed: [], start: "ask", open: "go", archive: "off", back: "stay", ...JSON.parse(localStorage.getItem("view") ?? "{}") }; }
-    catch { this.view = { rows: false, closed: [], start: "ask", open: "go", archive: "off", back: "stay" }; }
+    try { this.view = { rows: false, closed: [], start: "ask", press: "ask", open: "go", archive: "off", back: "stay", ...JSON.parse(localStorage.getItem("view") ?? "{}") }; }
+    catch { this.view = { rows: false, closed: [], start: "ask", press: "ask", open: "go", archive: "off", back: "stay" }; }
     this.refresh(cx);
     cx.timer.every(10000, cx => this.refresh(cx));
     // A menu or confirm choice comes back as "pick-<n>": status-menu and confirm only run commands.
@@ -174,6 +183,7 @@ export default class Board extends View {
         if (made) { this.justMade = null; this.landed(made, cx); }
         // Once, the first time the board has something to show: the setup panel (setup.js). Closing it is what ends "first".
         if (!this.setup && !localStorage.getItem("setup")) openSetup(this, cx);
+        checkUpdate(this, cx); // only while ⚙ has it on, at most once a day
         if (found && !on) this.watch(`${root}/${found.dir}`, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
       finally {
@@ -209,6 +219,16 @@ export default class Board extends View {
     if (this.view.start === "auto" && !this.busy(card).length) this.start(card, agent, cx); else this.ask(card, agent, cx);
   }
 
+  // A Start button (card, menu, task detail) asks as chosen in ⚙ (view.press): always ("ask"), only while
+  // another agent works in this checkout ("auto", see ask()), or never ("never").
+  asks(card) {
+    return this.view.press === "never" ? false : this.view.press === "auto" ? this.busy(card).length > 0 : true;
+  }
+
+  pressed(card, agent, cx) {
+    if (this.asks(card)) this.ask(card, agent, cx); else this.start(card, agent, cx);
+  }
+
   // The agent a Start button would send: installed, no manual notice, and the task not started yet.
   startable(card) {
     return card.column === "backlog" || card.column === "ready" ? this.installed(card) : null;
@@ -234,7 +254,7 @@ export default class Board extends View {
     return this.cards.filter(c => c !== card && c.root === card.root && c.agent && tabOf(c)?.working).map(c => c.id || c.title);
   }
 
-  // Always asked, never a side effect of a move. Cancel leaves the card where it is.
+  // The confirmation before an agent is sent. Cancel leaves the card where it is.
   ask(card, agent, cx) {
     const busy = this.busy(card);
     const model = this.modelFor(card, agent);
@@ -275,12 +295,14 @@ export default class Board extends View {
     this.picks = [];
     const add = (label, pick, more) => items.push({ label, ...more, action: [`kanbaa.pick-${this.picks.push(pick) - 1}`, {}] });
     const head = label => items.push({ header: true, label });
-    if (card.column === "ready" && agent) add(`Start ${agent.name}…`, cx => this.ask(card, agent, cx));
+    if (card.column === "ready" && agent) add(`Start ${agent.name}${this.asks(card) ? "…" : ""}`, cx => this.pressed(card, agent, cx));
     head("Move to");
     for (const c of COLUMNS) if (c.id !== card.column) add(c.label, cx => this.move(card, c, cx));
     head("Agent");
     for (const a of this.agents.filter(a => a.installed)) add(a.name, cx => this.write(card, setAgent(card.text, a.key), cx, cx => this.landed(card, cx)), { current: a.key === card.agent });
     add("Unassigned", cx => this.write(card, setAgent(card.text, ""), cx), { current: !card.agent });
+    head("Type");
+    for (const ty of [...TYPES, { key: "", label: "None" }]) add(ty.label, cx => this.write(card, setType(card.text, ty.key), cx), { current: ty.key === card.type });
     // As tall as its rows (a heading is a little lower than an item), up to a height it scrolls past.
     const height = Math.min(items.reduce((sum, it) => sum + (it.header ? 24 : 28), 12), 420);
     openOverlay({ mod: "status-menu", kind: "popup", width: 240, height, props: { items } });
@@ -325,7 +347,8 @@ export default class Board extends View {
           .hover(s => s.bg(t.raised).text_color(t.foreground)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => { cx.stop_propagation(); this.menu(card); }).child("⋯"))))
       .when(Boolean(card.note), el => el.child(div().text_size(11).text_color(t.dim).child(card.note)))
-      .when(Boolean(card.agent || card.boxes || card.manual || working || (!readonly && ["review", "done", "archive"].includes(card.column))), el => el.child(h_flex().gap(6).items_center().text_size(11).text_color(t.muted)
+      .when(Boolean(card.type || card.agent || card.boxes || card.manual || working || (!readonly && ["review", "done", "archive"].includes(card.column))), el => el.child(h_flex().gap(6).items_center().text_size(11).text_color(t.muted)
+        .when(Boolean(card.type), el => el.child(div().flex_none().px(5).rounded(4).bg(t.raised).text_color(t[TYPE_TINT[card.type]]).child(TYPES.find(ty => ty.key === card.type).label)))
         .when(Boolean(agent?.icon), el => el.child(agent.tint ? svg(agent.icon).size(13).flex_none() : image(agent.icon).w(13).h(13).flex_none()))
         // The agent's name goes to its tab while that tab exists.
         .child(h_flex().flex_1().min_w(0).child(div().id(`agent-${card.rel}`).min_w(0).truncate().child(`${agent?.name ?? card.agent}${card.model && card.agent ? ` · ${card.model}` : ""}`)
@@ -342,10 +365,10 @@ export default class Board extends View {
           .child(div().id(`reply-${card.rel}`).px(8).h(24).flex_none().flex().items_center().rounded(6).text_color(t.muted)
             .hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip("Answer in its terminal").on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .on_click((_e, cx) => { cx.stop_propagation(); goTo(at); }).child("Reply")))
-        // The sheepdog, bottom right: send the agent after this task. Asks first, like every Start button.
+        // The sheepdog, bottom right: send the agent after this task. Asks first unless ⚙ says otherwise, like every Start button.
         .when(!readonly && Boolean(go), el => el.child(div().id(`go-${card.rel}`).w(28).h(28).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.muted)
           .hover(s => s.bg(t.raised).text_color(t.accent)).tooltip(`Send ${go.name} after this task`).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-          .on_click((_e, cx) => { cx.stop_propagation(); this.ask(card, go, cx); }).child(svg("mods/kanbaa/dog.svg").size(19))))
+          .on_click((_e, cx) => { cx.stop_propagation(); this.pressed(card, go, cx); }).child(svg("mods/kanbaa/dog.svg").size(19))))
         // In Review: accept it from the board, the same as the opened task's "Mark as done" (finish() asks first if its agent still works).
         .when(!readonly && card.column === "review", el => el.child(div().id(`done-${card.rel}`).w(28).h(28).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.muted)
           .hover(s => s.bg(t.raised).text_color(t.done)).tooltip("Mark as done").on_mouse_down("left", (_e, cx) => cx.stop_propagation())
@@ -436,6 +459,7 @@ export default class Board extends View {
     else if (this.peek) this.peek = null;
     else if (this.shown) this.shown = null;
     else if (this.query.value()) this.query.set_value("");
+    else if (this.only) this.only = "";
     else return false;
     cx.notify();
     return true;
@@ -464,17 +488,33 @@ export default class Board extends View {
         .child(button("question-yes", q.yes, true).on_click((e, cx) => { done(e, cx); q.run(cx); }))));
   }
 
+  // Closes whichever dropdown list is open: the opened task's (pick), the New task panel's, ⚙'s.
+  shutLists(cx) {
+    if (!this.pick && !this.form?.open && !this.setup?.open) return;
+    this.pick = null;
+    if (this.form) this.form.open = null;
+    if (this.setup) this.setup.open = null;
+    cx.notify();
+  }
+
   // A panel over the board, inside its outline: the board dims and takes no clicks; one beside the panel runs `close`.
   over(t, id, close, panel, width = 420, tall = false) {
+    // A dropdown's list closes on any press on its panel; the dropdown's box and list keep their own presses (ui.js).
+    panel = panel.on_mouse_down("left", (_e, cx) => this.shutLists(cx));
+    // The board under the backdrop is still hit (nothing occludes it), so a click beside the panel also reached the
+    // card under it and reopened it: the backdrop keeps clicks and right-clicks for itself (KAN-26).
+    const backdrop = () => div().id(`${id}-backdrop`).absolute().inset_0().bg("#00000099")
+      .on_click((e, cx) => { cx.stop_propagation(); close?.(e, cx); })
+      .on_mouse_down("right", (_e, cx) => cx.stop_propagation());
     // A tall panel takes the board's height and scrolls its own middle (task()): a panel taller than the board did not scroll here.
-    if (tall) return div().id(`${id}-backdrop`).absolute().inset_0().bg("#00000099").on_click(close ?? (() => {}))
+    if (tall) return backdrop()
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       .child(v_flex().absolute().inset_0().items_center().p(14)
         .child(panel.id(id).flex_1().min_h(0).w_full().max_w(width).rounded(10).bg(t.popover).border_1().border_color(t.border).shadow_lg()
           .on_click((_e, cx) => cx.stop_propagation())));
     // The backdrop scrolls when the panel is taller than the board, so its buttons are always reachable;
     // the two springs keep a shorter panel in the middle and give a taller one its margin.
-    return div().id(`${id}-backdrop`).absolute().inset_0().bg("#00000099").on_click(close ?? (() => {}))
+    return backdrop()
       // Let the panel's scroll containers handle the wheel first, then keep it off the board.
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       .child(v_flex().id(`${id}-scroll`).absolute().inset_0().items_center().px(14).overflow_y_scrollbar()
@@ -722,7 +762,7 @@ export default class Board extends View {
     // Model: only under an agent the board can start on one.
     const facts = MODEL_FLAG[card.agent] ? [...SELECTORS, ["model", "Model"]] : SELECTORS;
     options.model = modelChoices(this.models[card.agent] ?? [], card.model, this.view.models?.[card.agent]);
-    const now = { status: card.column, agent: card.agent, pickup: card.manual ? "manual" : "agents", model: card.model };
+    const now = { status: card.column, type: card.type, agent: card.agent, pickup: card.manual ? "manual" : "agents", model: card.model };
     const close = (_e, cx) => { if (this.edit) this.queueSave(this.edit.rel, this.edit.field, this.edit.input.value(), cx); this.endEdit(); this.pick = null; this.peek = null; this.details = null; this.shown = null; cx.notify(); };
     const starter = this.startable(card), files = results(card.text).filter(path => path !== card.task), peek = this.peek?.rel === card.rel ? this.peek : null;
     const { body, answer, details } = parts(card), open = this.details === card.rel, at = card.agent ? tabOf(card) : null;
@@ -736,20 +776,30 @@ export default class Board extends View {
     const sized = (el, text, min) => long(text) ? el.h(260).overflow_y_scrollbar() : el.min_h(min);
     const field = el => el.px(8).rounded(7).border_1().border_color(t.accent).bg(t.background).text_color(t.foreground);
     // A pick writes at once, as the card's menu does. Landing in Ready with an agent follows the ⚙ setting.
-    const set = { status: key => setStatus(card.text, COLUMNS.find(c => c.id === key).word), agent: key => setAgent(card.text, key), pickup: key => setManual(card.text, key === "manual"), model: key => setModel(card.text, key) };
+    const set = { status: key => setStatus(card.text, COLUMNS.find(c => c.id === key).word), agent: key => setAgent(card.text, key), type: key => setType(card.text, key), pickup: key => setManual(card.text, key === "manual"), model: key => setModel(card.text, key) };
     const choose = (id, key) => (_e, cx) => {
+      cx.stop_propagation(); // the click would otherwise reach the fact under the list and reopen it
       this.pick = null;
       if (key === now[id]) { /* as it was */ }
       else if (id === "status" && key !== ARCHIVE.id) this.move(card, COLUMNS.find(c => c.id === key), cx);
-      else this.write(card, set[id](key), cx, id === "pickup" || id === "model" ? undefined : cx => this.landed(card, cx));
+      else this.write(card, set[id](key), cx, ["pickup", "model", "type"].includes(id) ? undefined : cx => this.landed(card, cx));
       cx.notify();
     };
-    const fact = ([id, name]) => v_flex().id(`fact-${id}`).flex_1().min_w(0).rounded(6)
-      .when(!readonly, el => el.cursor_pointer().on_click((_e, cx) => { this.pick = this.pick === id ? null : id; cx.notify(); }))
-      .child(label(t, name))
-      .child(h_flex().gap(4).items_center().text_size(12.8).text_color(this.pick === id ? t.accent : t.foreground)
-        .child(div().min_w(0).truncate().child(options[id].find(o => o.key === now[id])?.label ?? now[id]))
-        .when(!readonly, el => el.child(div().flex_none().text_size(10).text_color(t.dim).child("▾"))));
+    // The open fact's choices float in a Popup under the fact: they cover what is below instead of pushing it down, so the panel keeps its size.
+    const fact = ([id, name]) => Popup.new(`fact-pop-${id}`, v_flex().id(`fact-${id}`).rounded(6)
+        // Toggled on the press, kept from the panel, which closes an open list on any other press (over()).
+        .when(!readonly, el => el.cursor_pointer().on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); this.pick = this.pick === id ? null : id; cx.notify(); }))
+        .child(label(t, name))
+        .child(h_flex().gap(4).items_center().text_size(12.8).text_color(this.pick === id ? t.accent : t.foreground)
+          .child(div().min_w(0).truncate().child(options[id].find(o => o.key === now[id])?.label ?? now[id]))
+          .when(!readonly, el => el.child(div().flex_none().text_size(10).text_color(t.dim).child("▾")))))
+      .flex_1().min_w(0).anchor("top_left")
+      .when(this.pick === id && !readonly, el => el.content(v_flex().id("task-options").w(220).mt(4).p(4).max_h(160).overflow_y_scrollbar()
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).rounded(9).border_1().border_color(t.border).bg(t.raised).shadow_lg().text_size(12.8)
+        .children(options[id].map(o => h_flex().id(`option-${o.key}`).h(28).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover))
+          .on_click(choose(id, o.key))
+          .child(div().w(12).flex_none().text_color(t.accent).child(o.key === now[id] ? "✓" : ""))
+          .child(div().flex_1().min_w(0).truncate().child(o.label))))));
     // The description, in a box like the Result's.
     const about = el => el
       .child(div().flex_none().px(14).pt(10).pb(3).text_size(11.5).text_color(t.dim).child("Description"))
@@ -798,12 +848,6 @@ export default class Board extends View {
       // Everything between the title and the actions: in a tall panel this is what scrolls.
       .child((tall ? v_flex().id("task-scroll").flex_1().min_h(0).pb(4).overflow_y_scrollbar() : v_flex().flex_none())
         .child(h_flex().flex_none().px(14).gap(10).items_start().children(facts.map(fact)))
-        // The open fact's choices, across the panel's width: in a narrow board there is no room under one fact.
-        .when(Boolean(this.pick) && !readonly, el => el.child(div().flex_none().px(14).pt(6).child(v_flex().id("task-options").p(4).max_h(150).overflow_y_scrollbar().rounded(9).border_1().border_color(t.border).bg(t.raised).text_size(12.8)
-          .children(options[this.pick].map(o => h_flex().id(`option-${o.key}`).h(28).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover))
-            .on_click(choose(this.pick, o.key))
-            .child(div().w(12).flex_none().text_color(t.accent).child(o.key === now[this.pick] ? "✓" : ""))
-            .child(div().flex_1().min_w(0).truncate().child(o.label)))))))
         // The file's other header lines (Written, Repo, …): fixed.
         .when(card.meta.length > 0, el => el.child(v_flex().flex_none().px(14).pt(10).gap(2).text_size(11).text_color(t.dim)
           .children(card.meta.map(m => div().truncate().child(`${m.key}: ${m.value}`)))))
@@ -817,9 +861,9 @@ export default class Board extends View {
           .when(Boolean(find(layout(), "preview")), el => el.child(button("task-preview", "Open in Preview").on_click((ev, cx) => {
             setShared("preview.file", { path: card.path, on: this.context?.on ?? null }); run("layout.show", { id: "preview" }); close(ev, cx);
           })))
-          // Not yet started, with an installed agent and no manual notice: the same confirmed start as a move to Ready.
+          // Not yet started, with an installed agent and no manual notice: started as ⚙ says for Start buttons.
           .when(!readonly && Boolean(starter), el => el.child(button("task-start", h_flex().gap(5).items_center().child(svg("mods/kanbaa/dog.svg").size(13)).child("Start"), true)
-            .on_click((_e, cx) => this.ask(card, starter, cx))))
+            .on_click((_e, cx) => this.pressed(card, starter, cx))))
           .when(!readonly && card.column === "review", el => el.child(button("task-back", "Send back").on_click((_e, cx) => this.openBack(card, cx))))
           // While its agent's terminal is there: the way to its tab, to read along, answer or ask. Says why when the agent waits.
           .when(Boolean(at), el => el.child(button("task-reply", `Reply in terminal${at.blocked ? ": needs you" : at.resting && this.limits.get(card.path) ? ": hit a limit" : ""}`).tooltip("Go to its tab").on_click(() => goTo(at))))
@@ -834,6 +878,11 @@ export default class Board extends View {
   }
 
   render(cx) {
+    frame = { at: Date.now(), lists: {} };
+    try { return this.draw(cx); } finally { frame = null; }
+  }
+
+  draw(cx) {
     if (this.stale || key() !== this.context?.key) this.refresh(cx);
     this.follow(cx);
     const t = theme(), readonly = Boolean(this.context?.on), { rows, closed } = this.view;
@@ -844,7 +893,8 @@ export default class Board extends View {
       .hover(s => s.bg(t.hover)).child(label);
     const creates = !readonly && this.loaded && Boolean(this.root);
     this.searched = this.query.value();
-    const query = this.searched.trim(), visible = query ? this.cards.filter(card => matches(card, query)) : this.cards;
+    // The type filter (this.only, a type key or ""): only that type's cards, on the board and in the Archive.
+    const query = this.searched.trim(), only = this.only ?? "", visible = this.cards.filter(card => (!query || matches(card, query)) && (!only || card.type === only));
     const archived = visible.filter(card => card.column === "archive").sort(listed("archive")), tab = this.tab ?? "board";
     const column = c => {
       const cards = visible.filter(card => this.where(card) === c.id).sort(listed(c.id)).map(card => this.card(t, card, readonly)), shut = closed.includes(c.id);
@@ -888,15 +938,19 @@ export default class Board extends View {
           .child([this.root?.split(/[\\/]/).pop(), readonly && `read-only on ${this.context.on}`, this.capped && "showing the 200 files changed last"].filter(Boolean).join(" · ")))
         .when(!readonly && this.loaded && Boolean(this.root), el => el.child(button("board-new", "+ New").tooltip(`New task in ${this.dir ?? "a new to-do folder"}`)
           .on_click((_e, cx) => this.newTask("backlog", cx))))
-        .child(button("board-setup", "⚙").tooltip("Settings").on_click((_e, cx) => { this.keys.focus(); openSetup(this, cx); }))
+        .child(button("board-setup", this.update?.state === "available" ? "⚙ •" : "⚙").tooltip(this.update?.state === "available" ? "Settings · update available" : "Settings").on_click((_e, cx) => { this.keys.focus(); openSetup(this, cx); }))
         .child(button("board-view", rows ? "Columns" : "Rows").tooltip(rows ? "Statuses side by side" : "Statuses top to bottom").on_click((_e, cx) => this.setView({ rows: !rows }, cx)))
         .child(button("board-close", "✕").on_click(() => { run("layout.hide", { id: "board" }); })))
       // Search: every word typed must be in a task's id, title, agent or text. Board and Archive follow as you type.
       .when(this.cards.length > 0, el => el.child(h_flex().h(36).flex_none().px(10).gap(6).items_center().border_b(1).border_color(t.border)
         .child(div().id("board-search").flex_1().min_w(0).cursor_text().on_mouse_down("left", () => { this.query.focus(); })
           .child(Input.new(this.query).w_full().h(26).px(8).rounded(6).border_1().border_color(query ? t.accent : t.border).bg(t.background).text_size(12.5).text_color(t.foreground)))
-        .when(Boolean(query), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${visible.length} of ${this.cards.length}`))
-          .child(button("board-search-clear", "Clear").on_click((_e, cx) => { this.query.set_value(""); cx.notify(); })))))
+        // A pill per type: one at a time, a second click on it shows every type again.
+        .child(h_flex().flex_none().gap(2).children(TYPES.map(ty => div().id(`only-${ty.key}`).px(7).h(24).flex_none().flex().items_center().rounded(6).cursor_pointer().text_size(11.5)
+          .bg(only === ty.key ? t.selected : t.background).text_color(only === ty.key ? t[TYPE_TINT[ty.key]] : t.muted).hover(s => s.bg(t.hover))
+          .tooltip(only === ty.key ? "Show every type" : `Only ${ty.label} tasks`).on_click((_e, cx) => { this.only = only === ty.key ? "" : ty.key; cx.notify(); }).child(ty.label))))
+        .when(Boolean(query || only), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${visible.length} of ${this.cards.length}`))
+          .child(button("board-search-clear", "Clear").on_click((_e, cx) => { this.query.set_value(""); this.only = ""; cx.notify(); })))))
       .child(v_flex().id("board-body").relative().flex_1().min_h(0)
         // Where the pointer is while a card is dragged, for the copy of it that follows (below).
         .on_mouse_move((e, cx) => { const d = this.drag; if (d?.moved && e.local_position) { d.x = e.local_position.x; d.y = e.local_position.y; cx.notify(); } })
@@ -907,7 +961,7 @@ export default class Board extends View {
           : h_flex().id("board-columns").flex_1().min_h(0).p(10).gap(8).overflow_x_scrollbar().children(COLUMNS.map(column)))
         // One panel at a time, the topmost: a panel drawn over another scrolling one can come out underneath it.
         .when(Boolean(shown) && !this.form && !this.setup && !this.back && !this.question, el => el.child(this.task(t, shown, readonly)))
-        .when(Boolean(this.setup) && !this.form && !this.question, el => el.child(this.over(t, "board-setup-panel", closeSetup, renderSetup(this, t, closeSetup))))
+        .when(Boolean(this.setup) && !this.form && !this.question, el => el.child(this.over(t, "board-setup-panel", closeSetup, renderSetup(this, t, closeSetup), 640, true)))
         // No close on a click beside it: that would throw away what was typed.
         .when(Boolean(this.form) && !this.question, el => el.child(this.over(t, "board-new", null, renderForm(this, t))))
         .when(Boolean(this.back) && !this.question, el => el.child(this.over(t, "board-back", null, this.backPanel(t))))

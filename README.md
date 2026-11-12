@@ -50,11 +50,14 @@ Since it is all files, whatever works on files works on your board: git history 
 - A result block, a folded write-up and file links for review, with Send back, Mark as done and a Reply button that takes you to the agent's own terminal when it needs you.
 - Search across ids, titles, agents and text; ▲ and ▼ to order a status.
 - An archive, by hand or by itself after an hour, a day or a week.
+- An update check, off until you turn it on in `⚙`, and an agent that installs the update for you.
 - A script and a skill so that Claude Code, Codex and Hermes can create and move tasks themselves.
 
 ## Install
 
-Kanbaa is a Herdr layout. In Herdr, ask your agent to add it from this repository. It copies `layouts/kanbaa.json` and the three folders under `mods/` into your Herdr home and switches to the layout; your own layout stays as it is, and `ctrl-shift-l` switches between them. [RECIPE.md](RECIPE.md) is the full brief an agent builds or checks it from.
+Kanbaa is a Herdr layout. In Herdr, ask your agent to add it from this repository. It copies `layouts/kanbaa.json` and the three folders under `mods/` into your Herdr home and switches to the layout; your own layout stays as it is, and `ctrl-shift-l` switches between them. [RECIPE.md](RECIPE.md) is the full brief an agent builds or checks it from. The agent also writes the commit it copied into `mods/kanbaa/version.json`, so the board knows which version you have.
+
+To stay up to date, turn on **Updates** in `⚙`. When there is a newer version, `⚙` gets a dot and **Update with …** opens a tab where your agent reads what changed, tells you, and asks before it replaces a file you changed.
 
 Then press the Kanbaa button (the sheep) in the tab bar, in a repo that has a `to-do` folder, or make your first task with `+ New`.
 
@@ -82,7 +85,7 @@ Kanbaa is a Herdr mod, and Herdr mods are trusted code. So that nothing comes as
 - It opens a tab for an agent you send after a task, types one line into that agent's terminal when you send its task back, and closes its tab when you mark the task done.
 - Only if you ask it to in the settings, it writes a skill into `~/.claude/skills` or Hermes's skills, or a marked section into `~/.codex/AGENTS.md`, and removes them again when you untick them.
 
-It makes no network requests.
+It makes no network requests unless you turn on Updates in `⚙`. Then it runs `git ls-remote` against this repository on GitHub, once a day and when you open `⚙`, to learn the newest commit. Nothing else is sent.
 
 ## Good to know
 
