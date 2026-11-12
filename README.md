@@ -57,7 +57,7 @@ Since it is all files, whatever works on files works on your board: git history 
 
 Kanbaa is a Herdr layout. In Herdr, ask your agent to add it from this repository. It copies `layouts/kanbaa.json` and the three folders under `mods/` into your Herdr home and switches to the layout; your own layout stays as it is, and `ctrl-shift-l` switches between them. [RECIPE.md](RECIPE.md) is the full brief an agent builds or checks it from. The agent also writes the commit it copied into `mods/kanbaa/version.json`, so the board knows which version you have.
 
-To stay up to date, turn on **Updates** in `⚙`. When there is a newer version, `⚙` gets a dot and **Update with …** opens a tab where your agent reads what changed, tells you, and asks before it replaces a file you changed.
+To stay up to date, turn on **Updates** in `⚙`. When there is a newer version, `⚙` gets a dot and **Update with …** opens a tab where your agent reads what changed, tells you, and asks before it replaces a file you changed. The current release is v0.1.1; [CHANGELOG.md](CHANGELOG.md) says what each release brought. The update check follows `main`, so it also offers commits made between releases.
 
 Then press the Kanbaa button (the sheep) in the tab bar, in a repo that has a `to-do` folder, or make your first task with `+ New`.
 
